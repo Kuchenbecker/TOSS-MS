@@ -1,6 +1,5 @@
 # TOSS-MS
 ## Tools for Organize Spectrum from Mass Spectrometry (MS)
----
 
 Tools for Organize Spectrum from Mass Spectrometry (MS). Includes many scripts such as convertion and plotting.
 This is still a personal project aiming to facilitate conversion and treatment of **.raw file** data from ThermoScientific Tandem MS & MS/MS and EI-MS.
