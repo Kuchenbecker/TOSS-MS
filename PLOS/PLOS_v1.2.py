@@ -52,7 +52,7 @@ def read_text_file(txt_file, intype='r'):
 
 def plot_spectrum(mz_array, intensity_array, ylabel, title, 
                  mz_tolerance=0.5, label_threshold=None, 
-                 save_plot=False, output_file=None):
+                 save_plot=False, output_file=None, decimals=4):
     """Core plotting function for both file types."""
     mz_filtered, intensity_filtered = prune_close_peaks(mz_array, intensity_array, mz_tolerance)
 
@@ -66,8 +66,8 @@ def plot_spectrum(mz_array, intensity_array, ylabel, title,
     if label_threshold is not None:
         for mz, intensity in zip(mz_filtered, intensity_filtered):
             if intensity >= label_threshold:
-                ax.text(mz, intensity, f"{mz:.4f}", 
-                       ha='center', va='bottom', fontsize=8, color='black')
+                ax.text(mz, intensity, f"{mz:.{decimals}f}", 
+                       ha='center', va='bottom', fontsize=11, color='black')
 
     ax.set_xlim(np.min(mz_array) - 2, np.max(mz_array) + 2)
     ax.set_ylim(0, np.max(intensity_array) * 1.1)
@@ -97,6 +97,8 @@ def main():
                        help='Label peaks with intensity >= this value (5=5% for relative, 5=5 for absolute)')
     parser.add_argument('--save', action='store_true', 
                        help='Save plot as PNG instead of showing it')
+    parser.add_argument('--f', type=int, default=4, choices=range(1, 7),
+                       help='Number of decimal places for m/z labels (default: 4)')
     args = parser.parse_args()
     
     try:
@@ -114,7 +116,7 @@ def main():
                 output_file = None
                 
             plot_spectrum(mz_array, intensity_array, ylabel, title, 
-                         args.tolerance, args.label, args.save, output_file)
+                         args.tolerance, args.label, args.save, output_file, args.f)
             
         else:
             if args.input_file.lower().endswith('.txt'):
@@ -153,7 +155,7 @@ def main():
                     output_file = None
                     
                 plot_spectrum(mz_array, intensity_display, ylabel, title, 
-                             args.tolerance, args.label, args.save, output_file)
+                             args.tolerance, args.label, args.save, output_file, args.f)
                 
     except Exception as e:
         print(f"Error: {str(e)}")
