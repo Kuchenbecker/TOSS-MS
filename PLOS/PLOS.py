@@ -4,6 +4,11 @@ import numpy as np
 import os
 import argparse
 
+############################################################################################
+#           Program created to plot MS and/or MS^2 spectra from mzML or text files.        #       
+############################################################################################
+
+
 def prune_close_peaks(mz_array, intensity_array, tolerance=0.5):
     """Remove nearby peaks, keeping only the highest intensity one in each cluster."""
     if len(mz_array) == 0:
