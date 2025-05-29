@@ -7,6 +7,19 @@ import numpy as np
 from scipy.optimize import curve_fit
 from pyteomics import mzml
 
+def get_unique_filename(folder, base_name, extension):
+    """Generate a unique filename by appending a number if the file already exists"""
+    counter = 1
+    while True:
+        if counter == 1:
+            filename = f"{base_name}.{extension}"
+        else:
+            filename = f"{base_name}_{counter}.{extension}"
+        full_path = os.path.join(folder, filename)
+        if not os.path.exists(full_path):
+            return full_path, filename
+        counter += 1
+
 def hcd_to_ce(hcd_value):
     """Convert HCD value to Collision Energy (eV) using CE = 0.1742x + 3.8701"""
     return 0.1742 * hcd_value + 3.8701
@@ -103,7 +116,7 @@ def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False):
                             
     return abs_results, rel_results, energy_key, precursor_mass
 
-def save_combined_plot(df, energy_label, y_label_suffix=''):
+def save_combined_plot(df, energy_label, y_label_suffix='', output_folder='SYF_output'):
     """Save the combined plot with all ions"""
     plt.figure(figsize=(10, 6))
     
@@ -134,16 +147,24 @@ def save_combined_plot(df, energy_label, y_label_suffix=''):
     plt.legend()
     plt.grid(True)
     
-    # Save the plot
-    plot_filename = f'ion_intensities_combined_{energy_label.lower()}{y_label_suffix.replace(" ", "_").lower()}.png'
-    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
-    print(f"Combined plot saved to {plot_filename}")
+    # Create output folder if it doesn't exist
+    os.makedirs(output_folder, exist_ok=True)
+    
+    # Save the plot as SVG
+    plot_basename = f'ion_intensities_combined_{energy_label.lower()}{y_label_suffix.replace(" ", "_").lower()}'
+    svg_path, svg_filename = get_unique_filename(output_folder, plot_basename, 'svg')
+    plt.savefig(svg_path, bbox_inches='tight')
+    print(f"Combined plot saved to {svg_filename}")
+    
     plt.close()
 
-def save_individual_plots(df, energy_label, y_label_suffix='', normalize=False, sigmoidal_fit=False):
+def save_individual_plots(df, energy_label, y_label_suffix='', normalize=False, sigmoidal_fit=False, output_folder='SYF_output'):
     """Save individual plots for each ion"""
     # Get all columns except the energy columns
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
+    
+    # Create output folder if it doesn't exist
+    os.makedirs(output_folder, exist_ok=True)
     
     for ion in ion_columns:
         plt.figure(figsize=(10, 6))
@@ -233,10 +254,12 @@ def save_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
         # Adjust margins to make room for the equation box
         plt.subplots_adjust(right=0.75)
         
-        # Save the plot
-        plot_filename = f'ion_intensity_mz_{ion}_{energy_label.lower()}{y_label_suffix.replace(" ", "_").lower()}{"_normalized" if normalize else ""}.png'
-        plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
-        print(f"Individual plot saved to {plot_filename}")
+        # Save the plot as SVG
+        plot_basename = f'ion_intensity_mz_{ion}_{energy_label.lower()}{y_label_suffix.replace(" ", "_").lower()}{"_normalized" if normalize else ""}'
+        svg_path, svg_filename = get_unique_filename(output_folder, plot_basename, 'svg')
+        plt.savefig(svg_path, bbox_inches='tight')
+        print(f"Individual plot saved to {svg_filename}")
+        
         plt.close()
 
 def main():
@@ -288,10 +311,15 @@ def main():
     abs_df = abs_df[energy_cols + other_cols]
     rel_df = rel_df[energy_cols + other_cols]
     
-    # Save to CSV
-    output_file = f'ion_intensities_by_{energy_label.lower()}{"_relative" if args.r else ""}.csv'
-    (rel_df if args.r else abs_df).to_csv(output_file, index=False)
-    print(f"Results saved to {output_file}")
+    # Create output folder if it doesn't exist
+    output_folder = 'SYF_output'
+    os.makedirs(output_folder, exist_ok=True)
+    
+    # Save to CSV with unique filename
+    output_basename = f'ion_intensities_by_{energy_label.lower()}{"_relative" if args.r else ""}'
+    csv_path, csv_filename = get_unique_filename(output_folder, output_basename, 'csv')
+    (rel_df if args.r else abs_df).to_csv(csv_path, index=False)
+    print(f"Results saved to {csv_filename}")
     print(f"Precursor mass used for CECOM calculation: {precursor_mass:.4f} m/z")
     
     # Generate plots if requested
@@ -301,11 +329,11 @@ def main():
         y_label_suffix = ' (Relative)' if args.r else ' (Absolute)'
         
         # Always save the combined plot
-        save_combined_plot(plot_df, energy_label, y_label_suffix)
+        save_combined_plot(plot_df, energy_label, y_label_suffix, output_folder)
         
         # Save individual plots if requested
         if args.s:
-            save_individual_plots(plot_df, energy_label, y_label_suffix, args.n, args.sig)
+            save_individual_plots(plot_df, energy_label, y_label_suffix, args.n, args.sig, output_folder)
 
 if __name__ == "__main__":
     main()
