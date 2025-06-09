@@ -1,10 +1,11 @@
 import matplotlib.pyplot as plt
-from pyteomics import mzml  # Changed from mzxml to mzml
+from pyteomics import mzml
 import numpy as np
 import os
 
-def prune_close_peaks(mz_array, intensity_array, tolerance=0.5):
-    """Remove nearby peaks, keeping only the highest intensity one in each cluster."""
+DEFAULT_MZ_TOLERANCE = 0.5  # in Da
+
+def prune_close_peaks(mz_array, intensity_array, tolerance=DEFAULT_MZ_TOLERANCE):
     if len(mz_array) == 0:
         return mz_array, intensity_array
     
@@ -31,117 +32,140 @@ def prune_close_peaks(mz_array, intensity_array, tolerance=0.5):
     
     return np.array(filtered_mz), np.array(filtered_intensity)
 
-def plot_msms_with_labels(mzml_file, scan_num=None, title=None, mz_tolerance=0.5, intype='r', save_plot=False):
-    """
-    Plot MS/MS spectrum from mzML file with:
-    - Option for absolute (a) or relative (r) intensities
-    - Clean peak labels without borders
-    - Intensity percentage shown below m/z values
-    - Auto-adjusted axes
+def plot_msms_with_labels(mzml_file, scan_num=None, title=None, intype='r',
+                          outdir=None, clean_threshold=0.0, labelmin_threshold=0.0):
     
-    Parameters:
-    - save_plot: If True, saves the plot as PNG instead of showing it
-    """
-    with mzml.read(mzml_file) as reader:  # Changed to mzml.read
-        # Find target scan
-        scan = next((s for s in reader if 
-                    (scan_num is None and s['ms level'] == 2) or  # mzML uses 'ms level' instead of 'msLevel'
-                    (scan_num is not None and s['index'] + 1 == scan_num)), None)  # mzML uses 'index' (0-based)
+    with mzml.read(mzml_file) as reader:
         
-        if not scan:
-            raise ValueError("No suitable MS2 scan found")
-
-        # Extract data - mzML uses slightly different keys
-        mz_array = scan['m/z array']
-        intensity_array = scan['intensity array']
-        if intensity_array is None:
-            raise KeyError("No intensity data found")
-
-        # Process intensity data based on type
-        if intype.lower() == 'r':  # Relative intensities
+        if scan_num is not None:
+            scan = next((s for s in reader if s['index'] + 1 == scan_num and s['ms level'] == 2), None)
+            if not scan:
+                raise ValueError(f"MS2 scan number {scan_num} not found")
+            
+            mz_array = scan['m/z array']
+            intensity_array = scan['intensity array']
+            scan_label = f"Scan {scan['index'] + 1}"
+        
+        else:
+            all_mz = []
+            all_intensities = []
+            ms2_scans = [s for s in reader if s['ms level'] == 2]
+            
+            if not ms2_scans:
+                raise ValueError("No MS2 scans found in file.")
+            
+            print(f"Found {len(ms2_scans)} MS2 scans. Averaging them...")
+            
+            for scan in ms2_scans:
+                mz_array = scan['m/z array']
+                intensity_array = scan['intensity array']
+                
+                all_mz.extend(mz_array)
+                all_intensities.extend(intensity_array)
+            
+            bins = np.arange(min(all_mz), max(all_mz) + DEFAULT_MZ_TOLERANCE, DEFAULT_MZ_TOLERANCE)
+            digitized = np.digitize(all_mz, bins)
+            avg_mz = []
+            avg_intensity = []
+            
+            for i in range(1, len(bins)):
+                bin_indices = np.where(digitized == i)[0]
+                if len(bin_indices) > 0:
+                    avg_mz.append(np.mean(np.array(all_mz)[bin_indices]))
+                    avg_intensity.append(np.mean(np.array(all_intensities)[bin_indices]))
+            
+            mz_array = np.array(avg_mz)
+            intensity_array = np.array(avg_intensity)
+            scan_label = "Average of all MS2 scans"
+        
+        if intype.lower() == 'r':
             intensity_display = (intensity_array / np.max(intensity_array)) * 100
             ylabel = 'Relative Intensity (%)'
-        else:  # Absolute intensities
+        else:
             intensity_display = intensity_array
             ylabel = 'Absolute Intensity'
-
-        # Prune nearby peaks
-        mz_filtered, intensity_filtered = prune_close_peaks(mz_array, intensity_display, mz_tolerance)
-
-        # Auto-calculate axis limits
+        
+        mz_filtered, intensity_filtered = prune_close_peaks(mz_array, intensity_display)
+        
+        # Apply --clean threshold → affects plotting only
+        mask = intensity_filtered >= clean_threshold
+        mz_filtered = mz_filtered[mask]
+        intensity_filtered = intensity_filtered[mask]
+        
         x_min, x_max = np.min(mz_array), np.max(mz_array)
         
-        # Create plot
         fig, ax = plt.subplots(figsize=(12, 6))
+        markerline, stemlines, baseline = ax.stem(mz_filtered, intensity_filtered, linefmt='b-', markerfmt=' ', basefmt='k-')
         
-        # Modern stem plot
-        markerline, stemlines, baseline = ax.stem(
-            mz_array, intensity_display, 
-            linefmt='b-', markerfmt=' ', basefmt='k-')
+        # ---- Control peak thickness here ----
+        plt.setp(stemlines, linewidth=1.5, color='steelblue')  # You can adjust linewidth here
         
-        # Customize stem lines
-        plt.setp(stemlines, linewidth=0.7, color='steelblue')
-
-        # Label peaks >10% intensity (or top 10% for absolute)
-        threshold = np.max(intensity_display) * 0.1 if intype.lower() == 'a' else 10
+        rel_offset = 5.0  # Vertical offset for relative intensity label (fixes overlap)
+        
         for mz, intensity in zip(mz_filtered, intensity_filtered):
-            if intensity > threshold:
-                # Main m/z label (no border)
-                ax.text(mz, intensity, f"{mz:.4f}", 
-                        ha='center', va='bottom', fontsize=8, color='black')
-                
-                # Intensity percentage label below
+            if intensity >= labelmin_threshold:
+                # First intensity label (always on top)
                 if intype.lower() == 'r':
                     intensity_text = f"{intensity:.1f}%"
                 else:
                     intensity_text = f"{intensity:.1e}"
                 
-                ax.text(mz, intensity * 0.7, intensity_text,
-                        ha='center', va='top', fontsize=7, color='dimgray')
-
-        # Formatting with tight axis limits
-        ax.set_xlim(x_min - 2, x_max + 2)
-        ax.set_ylim(0, np.max(intensity_display) * 1.1)
-        ax.set_xlabel('m/z', fontsize=12)
-        ax.set_ylabel(ylabel, fontsize=12)
+                ax.text(mz, intensity + rel_offset, intensity_text,
+                        ha='center', va='bottom',
+                        fontsize=10, color='dimgray')  # <-- Font size for intensity label
+                
+                # Then mz label under it
+                ax.text(mz, intensity, f"{mz:.4f}",
+                        ha='center', va='bottom',
+                        fontsize=12, color='black')  # <-- Font size for mz label
         
-        title_text = title or f"MS/MS Spectrum (Scan {scan['index'] + 1})"  # mzML uses 0-based index
-        if 'collision energy' in scan:  # mzML uses lowercase with space
-            title_text += f", CE: {scan['collision energy']}"
-        ax.set_title(title_text, fontsize=14)
+        ax.set_xlim(x_min - 2, x_max + 2)
+        ax.set_ylim(0, np.max(intensity_filtered) * 1.2)
+        
+        # ---- Axes labels font size ----
+        ax.set_xlabel('m/z', fontsize=14)
+        ax.set_ylabel(ylabel, fontsize=14)
+        
+        if title:
+            # ---- Plot title font size ----
+            ax.set_title(title, fontsize=16)
         
         ax.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
         
-        if save_plot:
-            # Generate filename
-            base_name = os.path.splitext(os.path.basename(mzml_file))[0]
-            scan_part = f"_scan{scan['index'] + 1}" if scan_num is not None else ""
-            filename = f"{base_name}{scan_part}_msms.png"
-            plt.savefig(filename, dpi=300)
-            print(f"Plot saved as {filename}")
+        if outdir:
+            # outdir must be full path + filename with extension
+            outdir_dir = os.path.dirname(outdir)
+            if outdir_dir:
+                os.makedirs(outdir_dir, exist_ok=True)
+            plt.savefig(outdir, dpi=300)
+            print(f"Plot saved as {outdir}")
         else:
             plt.show()
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Plot MS/MS spectrum with smart labeling')
-    parser.add_argument('mzml_file', help='Path to mzML file')  # Changed from mzxml_file to mzml_file
+    parser.add_argument('mzml_file', help='Path to mzML file')
     parser.add_argument('--scan', type=int, help='Specific scan number')
-    parser.add_argument('--title', help='Custom plot title')
-    parser.add_argument('--tolerance', type=float, default=0.5, 
-                       help='m/z tolerance for peak clustering (default: 0.5)')
+    parser.add_argument('--title', help='Custom plot title (optional)')
     parser.add_argument('--intype', choices=['a', 'r'], default='r',
-                       help='Intensity type: a=absolute, r=relative (default)')
-    parser.add_argument('--save', action='store_true', 
-                       help='Save plot as PNG instead of showing it')
+                        help='Intensity type: a=absolute, r=relative (default)')
+    parser.add_argument('--outdir',
+                        help='Output file path (with extension, e.g. myplot.svg). If not provided, shows the plot.')
+    parser.add_argument('--clean', type=float, default=0.0,
+                        help='Minimum intensity threshold to plot peaks (default: 0)')
+    parser.add_argument('--labelmin', type=float, default=0.0,
+                        help='Minimum intensity threshold to label peaks (default: 0)')
     args = parser.parse_args()
     
     plot_msms_with_labels(
-        args.mzml_file,  # Changed from args.mzxml_file
-        args.scan, 
-        args.title, 
-        args.tolerance, 
+        args.mzml_file,
+        args.scan,
+        args.title,
         args.intype,
-        args.save
+        args.outdir,
+        args.clean,
+        args.labelmin
     )
+
