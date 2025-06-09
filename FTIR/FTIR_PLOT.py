@@ -30,7 +30,7 @@ def baseline_align(intensity, wavenumber, baseline_region=(1900, 2200)):
     baseline_val = np.mean(intensity[mask])
     return intensity - baseline_val
 
-def plot_ftir(filenames, apply_baseline=False, wn_range=None, marks=None, mark_offset=0.02, out_path=None):
+def plot_ftir(filenames, apply_baseline=False, wn_range=None, marks=None, mark_offset=0.02, out_path=None, legendless=False):
     plt.figure(figsize=(10, 6))
     
     for file in filenames:
@@ -60,9 +60,9 @@ def plot_ftir(filenames, apply_baseline=False, wn_range=None, marks=None, mark_o
 
     plt.xlabel("Wavenumber (cm⁻¹)")
     plt.ylabel("Intensity")
-    plt.title("FTIR Spectrum")
     plt.gca().invert_xaxis()
-    plt.legend()
+    if not legendless:
+        plt.legend()
     plt.grid(True)
     plt.tight_layout()
 
@@ -85,6 +85,7 @@ if __name__ == "__main__":
     parser.add_argument("--mark", type=parse_mark, help="Comma-separated wavenumbers to mark")
     parser.add_argument("--mark-offset", type=float, default=0.02,
                         help="Vertical offset for mark label as fraction of y-range (default=0.02)")
+    parser.add_argument("--legendless", action="store_true", help="Do not display the legend box")
 
     args = parser.parse_args()
 
@@ -102,5 +103,7 @@ if __name__ == "__main__":
         wn_range=args.range,
         marks=args.mark,
         mark_offset=args.mark_offset,
-        out_path=args.outdir
+        out_path=args.outdir,
+        legendless=args.legendless
     )
+

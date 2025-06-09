@@ -6,6 +6,10 @@ from scipy.optimize import curve_fit
 from sklearn.metrics import r2_score
 import os
 
+# ---- Configurable fontsize ----
+eq_fontsize = 20  # Change this to make the equation and R² text larger or smaller
+# -------------------------------
+
 # Define fitting functions
 def linear_func(x, a, b): return a * x + b
 def quadratic_func(x, a, b, c): return a * x**2 + b * x + c
@@ -121,7 +125,14 @@ def main():
                 y_fit = sigmoid_func(x_data, *popt)
                 equation = f'y = {popt[0]:.4f} / (1 + e^(-{popt[1]:.4f}(x-{popt[2]:.4f}))) + {popt[3]:.4f}'
             r2 = r2_score(y_data, y_fit)
-            ax.plot(x_data, y_fit, 'r-', label=f'{equation}\nR² = {r2:.4f}')
+            # Instead of using ax.plot(label=...), use ax.plot() and ax.text() for fontsize control
+            ax.plot(x_data, y_fit, 'r-', label='Fitted curve')
+            ax.text(0.05, 0.95,
+                    f'{equation}\nR² = {r2:.4f}',
+                    transform=ax.transAxes,
+                    fontsize=eq_fontsize,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         except Exception as e:
             print(f"Error during fitting: {e}")
 
