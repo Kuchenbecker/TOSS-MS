@@ -196,7 +196,7 @@ def save_combined_plot(df, energy_label, y_label_suffix='', output_folder='SYF_o
     plt.ylabel(f'Intensity{y_label_suffix}')
     title = r'Ion Intensities vs. CE$_{\mathrm{COM}}$' if energy_label == 'CECOM' else f'Ion Intensities vs. {energy_label}'
     plt.title(title)
-    plt.legend()
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.grid(True)
     os.makedirs(output_folder, exist_ok=True)
     plot_basename = f'ion_intensities_combined_{energy_label.lower()}{y_label_suffix.replace(" ", "_").lower()}'
