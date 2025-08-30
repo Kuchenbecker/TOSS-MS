@@ -113,7 +113,7 @@ def plot_msms_with_labels(mzml_file=None, scan_num=None, intype='r',
                 for mz, intensity in zip(overlay_mz, overlay_intensity):
                     ax.vlines(mz, 0, intensity, linewidth=1)
                     if intensity >= labelmin_threshold:
-                        ax.text(mz, float(intensity), f'{mz:.2f}', 
+                        ax.text(mz, float(intensity), f'{mz:.4f}', 
                                rotation=90, va='bottom', ha='center',
                                fontsize=8)
                 
@@ -164,7 +164,7 @@ def plot_msms_with_labels(mzml_file=None, scan_num=None, intype='r',
         for mz, intensity in zip(mz_array, intensity_array):
             ax.vlines(mz, 0, float(intensity), linewidth=1)
             if intensity >= labelmin_threshold:
-                ax.text(mz, float(intensity), f'{mz:.2f}', 
+                ax.text(mz, float(intensity), f'{mz:.4f}', 
                        rotation=90, va='bottom', ha='center',
                        fontsize=8)
         

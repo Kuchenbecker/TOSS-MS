@@ -7,13 +7,14 @@ import numpy as np
 from scipy.optimize import curve_fit
 from pyteomics import mzml
 
+# -----------------------------
+# Utilities
+# -----------------------------
+
 def get_unique_filename(folder, base_name, extension):
     counter = 1
     while True:
-        if counter == 1:
-            filename = f"{base_name}.{extension}"
-        else:
-            filename = f"{base_name}_{counter}.{extension}"
+        filename = f"{base_name}.{extension}" if counter == 1 else f"{base_name}_{counter}.{extension}"
         full_path = os.path.join(folder, filename)
         if not os.path.exists(full_path):
             return full_path, filename
@@ -25,11 +26,8 @@ def hcd_to_ce(hcd_value):
 def calculate_cecom(ce_value, precursor_mass):
     return ce_value * (28.0134 / (precursor_mass + 28.0134))
 
-def sigmoid(x, L, x0, k, b):
-    return L / (1 + np.exp(-k * (x - x0))) + b
-
 def format_equation_param(value):
-    return f"{value:.2f}".replace("--", "-")
+    return f"{value:.4g}".replace("--", "-")
 
 def extract_hcd_value(filename):
     match = re.search(r'HCD(\d+)', filename)
@@ -43,6 +41,94 @@ def find_closest_peak(spectrum, target_mz, tolerance=0.01):
     if diffs[min_diff_idx] <= tolerance:
         return intensity_array[min_diff_idx]
     return 0
+
+# -----------------------------
+# Model definitions for --fit
+# -----------------------------
+
+def four_pl(x, A1, A2, x0, p):
+    """Decreasing 4-parameter logistic (Hill-type).
+    y = A2 + (A1 - A2) / (1 + (x/x0)**p)
+    """
+    return A2 + (A1 - A2) / (1 + (x / x0) ** p)
+
+def exp_decay(x, A, k, C):
+    """Simple exponential decay to asymptote C: y = A * exp(-k x) + C"""
+    return A * np.exp(-k * x) + C
+
+def weibull_surv(x, A, lam, k, C):
+    """Weibull survival-like decay: y = A * exp(-(x/lam)**k) + C"""
+    return A * np.exp(- (x / lam) ** k) + C
+
+def gompertz(x, A, b, c, C):
+    """Gompertz-type decay: y = A * exp(-b * c**x) + C"""
+    return A * np.exp(-b * (c ** x)) + C
+
+MODEL_SPECS = {
+    '4PL': {
+        'fn': four_pl,
+        'p0': lambda x, y: [float(np.nanmax(y)), float(np.nanmin(y)), np.nanmedian(x), 3.0],
+        'bounds': ([0, -np.inf, 0, 0.1], [np.inf, np.inf, np.inf, 20.0]),
+        'latex': lambda p: (r"$y= %s + \frac{%s-%s}{1+(x/%s)^{%s}}$" % tuple(map(format_equation_param, [p[1], p[0], p[1], p[2], p[3]])))
+    },
+    'Exponential': {
+        'fn': exp_decay,
+        'p0': lambda x, y: [float(np.nanmax(y)), 1.0, float(np.nanmin(y))],
+        'bounds': ([0.0, 0.0, -np.inf], [np.inf, 10.0, np.inf]),
+        'latex': lambda p: (r"$y= %s\,e^{-%s x}+%s$" % tuple(map(format_equation_param, p)))
+    },
+    'WeibullSurv': {
+        'fn': weibull_surv,
+        'p0': lambda x, y: [float(np.nanmax(y)), max(1e-6, float(np.nanmedian(x))), 3.0, float(np.nanmin(y))],
+        'bounds': ([0.0, 1e-6, 0.1, -np.inf], [np.inf, 10.0, 20.0, np.inf]),
+        'latex': lambda p: (r"$y= %s\,e^{-(x/%s)^{%s}}+%s$" % tuple(map(format_equation_param, p)))
+    },
+    'Gompertz': {
+        'fn': gompertz,
+        'p0': lambda x, y: [float(np.nanmax(y)), 0.5, 1.5, float(np.nanmin(y))],
+        'bounds': ([0.0, 1e-3, 1e-3, -np.inf], [np.inf, 10.0, 10.0, np.inf]),
+        'latex': lambda p: (r"$y= %s\,e^{-%s\,%s^{x}}+%s$" % tuple(map(format_equation_param, p)))
+    }
+}
+
+def fit_and_score(x, y, model_key):
+    spec = MODEL_SPECS[model_key]
+    fn = spec['fn']
+    p0 = spec['p0'](x, y)
+    bounds = spec['bounds']
+    try:
+        popt, _ = curve_fit(fn, x, y, p0=p0, bounds=bounds, maxfev=20000)
+        yhat = fn(x, *popt)
+        resid = y - yhat
+        rss = float(np.nansum(resid ** 2))
+        n = int(np.sum(~np.isnan(y)))
+        k = len(popt)
+        sst = float(np.nansum((y - np.nanmean(y)) ** 2)) if n > 0 else np.nan
+        r2 = 1 - rss / sst if sst > 0 else np.nan
+        aic = n * np.log(rss / n) + 2 * k if n > k and rss > 0 else np.inf
+        return {
+            'ok': True,
+            'model': model_key,
+            'popt': popt,
+            'r2': r2,
+            'aic': aic,
+            'rss': rss,
+            'latex': spec['latex'](popt)
+        }
+    except Exception as e:
+        return {'ok': False, 'model': model_key, 'error': str(e)}
+
+def choose_best_model(x, y):
+    results = [fit_and_score(x, y, m) for m in MODEL_SPECS.keys()]
+    ok = [r for r in results if r['ok']]
+    if not ok:
+        return {'ok': False, 'error': '; '.join([r.get('error', 'fit failed') for r in results])}
+    ok.sort(key=lambda r: (r['aic'], -r['r2']))
+    return ok[0]
+
+# -----------------------------
+# Core data extraction
+# -----------------------------
 
 def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False):
     abs_results = {}
@@ -95,8 +181,12 @@ def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False):
 
     return abs_results, rel_results, energy_key, precursor_mass
 
-def save_combined_plot(df, energy_label, y_label_suffix='', output_folder='SYF_output'):
-    plt.figure(figsize=(10, 6))
+# -----------------------------
+# Plotting (now only SHOW, not SAVE)
+# -----------------------------
+
+def show_combined_plot(df, energy_label, y_label_suffix=''):  # CHANGED: renamed and now returns fig
+    fig = plt.figure(figsize=(10, 6))
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
     for ion in ion_columns:
         plt.plot(df[energy_label], df[ion], 'o-', label=f'm/z {ion}')
@@ -105,99 +195,107 @@ def save_combined_plot(df, energy_label, y_label_suffix='', output_folder='SYF_o
     plt.ylabel(f'Intensity{y_label_suffix}')
     title = r'Ion Intensities vs. CE$_{\mathrm{COM}}$' if energy_label == 'CECOM' else f'Ion Intensities vs. {energy_label}'
     plt.title(title)
-    plt.legend()
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.grid(True)
-    os.makedirs(output_folder, exist_ok=True)
-    plot_basename = f'ion_intensities_combined_{energy_label.lower()}{y_label_suffix.replace(" ", "_").lower()}'
-    svg_path, svg_filename = get_unique_filename(output_folder, plot_basename, 'svg')
-    plt.savefig(svg_path, bbox_inches='tight')
-    print(f"Combined plot saved to {svg_filename}")
-    plt.close()
+    plt.tight_layout()
+    return fig
 
-def save_individual_plots(df, energy_label, y_label_suffix='', normalize=False, sigmoidal_fit=False, output_folder='SYF_output'):
+def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, auto_fit=False):  # CHANGED
+    figs = []
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
-    os.makedirs(output_folder, exist_ok=True)
     for ion in ion_columns:
-        plt.figure(figsize=(10, 6))
-        x_data = df[energy_label].values
-        y_data = df[ion].values
+        fig = plt.figure(figsize=(10, 6))
+        x_data = df[energy_label].values.astype(float)
+        y_data = df[ion].values.astype(float)
+
+        # Normalization for visualization only
         if normalize:
-            max_intensity = y_data.max()
+            max_intensity = np.nanmax(y_data)
             if max_intensity > 0:
-                y_data = y_data / max_intensity * 100
-            y_label = f'Normalized Intensity{y_label_suffix} (%)'
+                y_plot = y_data / max_intensity * 100.0
+                y_label = f'Normalized Intensity{y_label_suffix} (%)'
+            else:
+                y_plot = y_data.copy()
+                y_label = f'Intensity{y_label_suffix}'
         else:
+            y_plot = y_data.copy()
             y_label = f'Intensity{y_label_suffix}'
-        plt.plot(x_data, y_data, 'o', color='blue', label='Data')
-        if sigmoidal_fit:
-            try:
-                p0 = [max(y_data), np.median(x_data), 1, min(y_data)]
-                popt, _ = curve_fit(sigmoid, x_data, y_data, p0, method='dogbox', maxfev=10000)
-                residuals = y_data - sigmoid(x_data, *popt)
-                r_squared = 1 - (np.sum(residuals**2) / np.sum((y_data - np.mean(y_data))**2))
-                if r_squared >= 0.9:
-                    x_fit = np.linspace(min(x_data), max(x_data), 100)
-                    y_fit = sigmoid(x_fit, *popt)
-                    plt.plot(x_fit, y_fit, 'r-', label='Sigmoidal Fit')
-                    equation = (
-                        r'$y = \frac{' + format_equation_param(popt[0]) + r'}{1 + e^{' +
-                        format_equation_param(-popt[2]) + r'(x-' + format_equation_param(popt[1]) +
-                        r')}} + ' + format_equation_param(popt[3]) + '$\n' +
-                        f'$R^2 = {r_squared:.4f}$'
-                    )
-                    plt.text(0.98, 0.5, equation, transform=plt.gca().transAxes,
-                             fontsize=10, verticalalignment='center', horizontalalignment='right',
-                             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        plt.plot(x_data, y_plot, 'o', label='Data')
+
+        if auto_fit:
+            best = choose_best_model(x_data, y_data)
+            if best.get('ok', False):
+                x_fit = np.linspace(np.nanmin(x_data), np.nanmax(x_data), 300)
+                y_fit_raw = MODEL_SPECS[best['model']]['fn'](x_fit, *best['popt'])
+                if normalize and np.nanmax(y_data) > 0:
+                    y_fit = y_fit_raw / np.nanmax(y_data) * 100.0
                 else:
-                    plt.text(0.98, 0.5, f"$R^2 = {r_squared:.4f}$ (No good fit)",
-                             transform=plt.gca().transAxes,
-                             fontsize=10, verticalalignment='center', horizontalalignment='right',
-                             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-            except Exception as e:
-                print(f"Could not fit sigmoidal curve for m/z {ion}: {str(e)}")
-                plt.text(0.98, 0.5, "Sigmoidal fit failed", transform=plt.gca().transAxes,
-                         fontsize=10, verticalalignment='center', horizontalalignment='right',
-                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    y_fit = y_fit_raw
+
+                plt.plot(x_fit, y_fit, '-', label=f"{best['model']} fit")
+
+                ec50 = None
+                if best['model'] == 'WeibullSurv':
+                    A, lam, k, C = best['popt']
+                    if lam > 0 and k > 0:
+                        ec50 = lam * (np.log(2.0)) ** (1.0 / k)
+                elif best['model'] == '4PL':
+                    ec50 = best['popt'][2]
+
+                text = best['latex'] + ("\n$R^2$ = %.4f" % best['r2']) + ("\nAIC = %.2f" % best['aic'])
+                if ec50 is not None and np.isfinite(ec50):
+                    text += ("\n$EC_{50}$ ≈ %s" % format_equation_param(ec50))
+                plt.text(0.98, 0.5, text, transform=plt.gca().transAxes,
+                         fontsize=9, va='center', ha='right',
+                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+            else:
+                plt.text(0.98, 0.5, f"Fit failed: {best.get('error','unknown')}", transform=plt.gca().transAxes,
+                         fontsize=9, va='center', ha='right',
+                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+
         xlabel = r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else ('CE (eV)' if energy_label == 'CE' else 'HCD')
         plt.xlabel(xlabel)
         plt.ylabel(y_label)
         title = rf'Ion Intensity vs. CE$_{{\mathrm{{COM}}}}$ (m/z {ion})' if energy_label == 'CECOM' else f'Ion Intensity vs. {energy_label} (m/z {ion})'
         plt.title(title)
         plt.grid(True)
-        if sigmoidal_fit:
-            plt.legend(loc='upper left')
+        plt.legend(loc='upper left')
         plt.subplots_adjust(right=0.75)
-        plot_basename = f'ion_intensity_mz_{ion}_{energy_label.lower()}{y_label_suffix.replace(" ", "_").lower()}{"_normalized" if normalize else ""}'
-        svg_path, svg_filename = get_unique_filename(output_folder, plot_basename, 'svg')
-        plt.savefig(svg_path, bbox_inches='tight')
-        print(f"Individual plot saved to {svg_filename}")
-        plt.close()
+        figs.append(fig)
+    return figs
+
+# -----------------------------
+# CLI
+# -----------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description='Extract ion intensities from .mzML files and optionally plot them.')
+    parser = argparse.ArgumentParser(description='Extract ion intensities from .mzML files and plot them. Optionally save CSV.')
     parser.add_argument('folder_path', help='Path to the folder containing .mzML files')
     parser.add_argument('ions', help='List of target ion masses (comma-separated)')
-    parser.add_argument('--plot', action='store_true', help='Generate plots of the results')
+    # REMOVED --plot  # CHANGED
+    parser.add_argument('--csv', action='store_true', help='Save results to CSV (default: do not save)')  # NEW
     parser.add_argument('--r', action='store_true', help='Use relative intensities instead of absolute')
-    parser.add_argument('--s', action='store_true', help='Save separate graph for each ion (in addition to combined plot)')
-    parser.add_argument('--n', action='store_true', help='Normalize each ion to 100%% in separate graphs (requires --s)')
-    parser.add_argument('--sig', action='store_true', help='Fit sigmoidal curve to individual ion plots (requires --s)')
+    parser.add_argument('--s', action='store_true', help='Open a separate graph window for each ion (in addition to combined plot)')
+    parser.add_argument('--n', action='store_true', help='Normalize each ion to 100% in separate graphs (requires --s)')
+    parser.add_argument('--fit', action='store_true', help='Auto-fit best model (Weibull/4PL/Exponential/Gompertz) on individual ion plots (requires --s)')
     parser.add_argument('--CE', action='store_true', help='Convert HCD values to Collision Energy (eV)')
     parser.add_argument('--COM', action='store_true', help='Use Center of Mass collision energy (requires --CE)')
-    parser.add_argument('--tog', help='Only generate a combined plot for specified ion masses (comma-separated)')
+    parser.add_argument('--tog', help='Only plot the combined graph for specified ion masses (comma-separated)')
+
     args = parser.parse_args()
 
     if args.n and not args.s:
         parser.error("--n requires --s to be specified")
-    if args.sig and not args.s:
-        parser.error("--sig requires --s to be specified")
+    if args.fit and not args.s:
+        parser.error("--fit requires --s to be specified")
     if args.COM and not args.CE:
         parser.error("--COM requires --CE to be specified")
 
     if args.tog:
         args.s = False
         args.n = False
-        args.sig = False
+        args.fit = False
         ions_for_plotting = [float(mass.strip()) for mass in args.tog.split(',')]
         full_ion_list = [float(mass.strip()) for mass in args.ions.split(',')]
         target_ions = full_ion_list
@@ -227,27 +325,32 @@ def main():
     abs_df = abs_df[energy_cols + other_cols]
     rel_df = rel_df[energy_cols + other_cols]
 
-    output_folder = 'SYF_output'
-    os.makedirs(output_folder, exist_ok=True)
+    # Save CSV only if requested
+    if args.csv:  # NEW
+        output_folder = 'SYF_output'
+        os.makedirs(output_folder, exist_ok=True)
+        output_basename = f'ion_intensities_by_{energy_label.lower()}{"_relative" if args.r else ""}'
+        csv_path, csv_filename = get_unique_filename(output_folder, output_basename, 'csv')
+        (rel_df if args.r else abs_df).to_csv(csv_path, index=False)
+        print(f"Results saved to {csv_filename}")
 
-    output_basename = f'ion_intensities_by_{energy_label.lower()}{"_relative" if args.r else ""}'
-    csv_path, csv_filename = get_unique_filename(output_folder, output_basename, 'csv')
-    (rel_df if args.r else abs_df).to_csv(csv_path, index=False)
-    print(f"Results saved to {csv_filename}")
     print(f"Precursor mass used for CECOM calculation: {precursor_mass:.4f} m/z")
 
-    if args.plot:
-        plot_df = rel_df if args.r else abs_df
-        y_label_suffix = ' (Relative)' if args.r else ' (Absolute)'
+    # Always plot (open windows)  # NEW default
+    plot_df = rel_df if args.r else abs_df
+    y_label_suffix = ' (Relative)' if args.r else ' (Absolute)'
 
-        if args.tog:
-            selected_cols = energy_cols + [ion for ion in ions_for_plotting if ion in plot_df.columns]
-            plot_df = plot_df[selected_cols]
-            save_combined_plot(plot_df, energy_label, y_label_suffix, output_folder)
-        else:
-            save_combined_plot(plot_df, energy_label, y_label_suffix, output_folder)
-            if args.s:
-                save_individual_plots(plot_df, energy_label, y_label_suffix, args.n, args.sig, output_folder)
+    if args.tog:
+        selected_cols = energy_cols + [ion for ion in ions_for_plotting if ion in plot_df.columns]
+        plot_df = plot_df[selected_cols]
+        show_combined_plot(plot_df, energy_label, y_label_suffix)
+    else:
+        show_combined_plot(plot_df, energy_label, y_label_suffix)
+        if args.s:
+            show_individual_plots(plot_df, energy_label, y_label_suffix, args.n, args.fit)
+
+    # Open interactive windows so the user can save via the UI
+    plt.show()  # NEW
 
 if __name__ == "__main__":
     main()
