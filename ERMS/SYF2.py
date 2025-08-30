@@ -250,7 +250,7 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
     figs = []
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
     for ion in ion_columns:
-        fig = plt.figure(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(10, 6))
         x_data = df[energy_label].values.astype(float)
         y_data = df[ion].values.astype(float)
 
@@ -267,7 +267,10 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
             y_plot = y_data.copy()
             y_label = f'Intensity{y_label_suffix}'
 
-        plt.plot(x_data, y_plot, 'o', label='Data')
+        data_line, = ax.plot(x_data, y_plot, 'o', label='Data')
+
+        fit_line = None
+        eq_text = None
 
         if auto_fit:
             best = choose_best_model(x_data, y_data)
@@ -279,8 +282,9 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
                 else:
                     y_fit = y_fit_raw
 
-                plt.plot(x_fit, y_fit, '-', label=f"{best['model']} fit")
+                fit_line, = ax.plot(x_fit, y_fit, '-', label=f"{best['model']} fit")
 
+                # EC50 (quando aplicável)
                 ec50 = None
                 if best['model'] == 'WeibullSurv':
                     A, lam, k, C = best['popt']
@@ -289,24 +293,46 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
                 elif best['model'] == '4PL':
                     ec50 = best['popt'][2]
 
-                text = best['latex'] + ("\n$R^2$ = %.4f" % best['r2']) + ("\nAIC = %.2f" % best['aic'])
+                # Texto da equação/estatísticas
+                eq_text = best['latex'] + ("\n$R^2$ = %.4f" % best['r2']) + ("\nAIC = %.2f" % best['aic'])
                 if ec50 is not None and np.isfinite(ec50):
-                    text += ("\n$EC_{50}$ ≈ %s" % format_equation_param(ec50))
-                plt.text(0.98, 0.5, text, transform=plt.gca().transAxes,
+                    eq_text += ("\n$EC_{50}$ ≈ %s" % format_equation_param(ec50))
+
+                # >>>> LEGENDA E EQUAÇÃO FORA, À DIREITA <<<<
+                # Reserva espaço à direita para o painel
+                plt.subplots_adjust(left=0.12, right=0.65)
+
+                # Equação/estatísticas no painel direito
+                fig.text(0.98, 0.5, eq_text,
                          fontsize=9, va='center', ha='right',
-                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+
+                # Legenda externa à direita (Data + Fit)
+                legend_handles = [data_line] + ([fit_line] if fit_line is not None else [])
+                legend_labels = ['Data'] + ([f"{best['model']} fit"] if fit_line is not None else [])
+                fig.legend(legend_handles, legend_labels,
+                           loc='center right', bbox_to_anchor=(0.98, 0.8), frameon=True)
+
             else:
-                plt.text(0.98, 0.5, f"Fit failed: {best.get('error','unknown')}", transform=plt.gca().transAxes,
+                # Falha no fit: ainda usa layout com painel à direita e legenda externa com "Data"
+                plt.subplots_adjust(left=0.12, right=0.65)
+                fig.text(0.98, 0.5, f"Fit failed: {best.get('error','unknown')}",
                          fontsize=9, va='center', ha='right',
-                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+                fig.legend([data_line], ['Data'],
+                           loc='center right', bbox_to_anchor=(0.98, 0.8), frameon=True)
+
+        # Quando NÃO usa --fit, mantém legenda padrão dentro do gráfico
+        if not auto_fit:
+            ax.legend(loc='upper left')
 
         xlabel = r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else ('CE (eV)' if energy_label == 'CE' else 'HCD')
-        plt.xlabel(xlabel)
-        plt.ylabel(y_label)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(y_label)
         title = rf'Ion Intensity vs. CE$_{{\mathrm{{COM}}}}$ (m/z {ion})' if energy_label == 'CECOM' else f'Ion Intensity vs. {energy_label} (m/z {ion})'
-        plt.grid(True)
-        plt.legend(loc='upper left')
-        plt.subplots_adjust(right=0.75)
+        ax.set_title(title)
+        ax.grid(True)
+
         figs.append(fig)
     return figs
 
@@ -338,7 +364,7 @@ def main():
     parser.add_argument('--tog',
                         help='Only plot the combined graph for specified ion masses (comma-separated)')
 
-    # NEW: mass tolerance options
+    # Mass tolerance options
     parser.add_argument('--mtol', type=float, default=0.01,
                         help='Mass tolerance for peak aggregation (Da by default) [default: 0.01]')
     parser.add_argument('--ppm', action='store_true',
