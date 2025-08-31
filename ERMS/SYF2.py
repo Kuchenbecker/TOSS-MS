@@ -98,6 +98,18 @@ def gompertz(x, A, b, c, C):
     """Gompertz-type decay: y = A * exp(-b * c**x) + C"""
     return A * np.exp(-b * (c ** x)) + C
 
+# NEW: peak-shaped models
+def gaussian_peak(x, A, mu, sigma, C):
+    """Gaussian peak in energy: y = C + A * exp(-(x-mu)^2 / (2*sigma^2))"""
+    sigma = max(sigma, 1e-12)
+    return C + A * np.exp(- (x - mu) ** 2 / (2.0 * sigma ** 2))
+
+def lognormal_peak(x, A, mu, sigma, C):
+    """Log-normal 'shape' (skewed peak): y = C + A * exp(-(ln x - mu)^2 / (2*sigma^2))"""
+    sigma = max(sigma, 1e-12)
+    x = np.maximum(x, 1e-12)  # estabilidade numérica
+    return C + A * np.exp(- (np.log(x) - mu) ** 2 / (2.0 * sigma ** 2))
+
 MODEL_SPECS = {
     '4PL': {
         'fn': four_pl,
@@ -123,6 +135,31 @@ MODEL_SPECS = {
         'p0': lambda x, y: [float(np.nanmax(y)), 0.5, 1.5, float(np.nanmin(y))],
         'bounds': ([0.0, 1e-3, 1e-3, -np.inf], [np.inf, 10.0, 10.0, np.inf]),
         'latex': lambda p: (r"$y= %s\,e^{-%s\,%s^{x}}+%s$" % tuple(map(format_equation_param, p)))
+    },
+    # NEW models in --fit
+    'GaussianPeak': {
+        'fn': gaussian_peak,
+        'p0': lambda x, y: [
+            max(1e-9, float(np.nanmax(y) - np.nanmin(y))),                  # A
+            float(x[np.nanargmax(y)]) if np.any(np.isfinite(y)) else float(np.nanmedian(x)),  # mu
+            max(1e-6, float((np.nanmax(x) - np.nanmin(x)) / 6.0)),         # sigma
+            float(np.nanmin(y))                                            # C
+        ],
+        'bounds': ([0.0, 0.0, 1e-6, -np.inf], [np.inf, np.inf, 10.0, np.inf]),
+        'latex': lambda p: (r"$y= %s + %s\,e^{-\frac{(x-%s)^2}{2\,%s^2}}$"
+                            % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]])))
+    },
+    'LogNormalPeak': {
+        'fn': lognormal_peak,
+        'p0': lambda x, y: [
+            max(1e-9, float(np.nanmax(y) - np.nanmin(y))),     # A
+            float(np.log(max(1e-12, x[np.nanargmax(y)]))),     # mu (em ln x)
+            0.3,                                               # sigma
+            float(np.nanmin(y))                                # C
+        ],
+        'bounds': ([0.0, -10.0, 1e-6, -np.inf], [np.inf, 10.0, 5.0, np.inf]),
+        'latex': lambda p: (r"$y= %s + %s\,\exp\!\Big(-\frac{(\ln x - %s)^2}{2\,%s^2}\Big)$"
+                            % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]])))
     }
 }
 
@@ -270,7 +307,6 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
         data_line, = ax.plot(x_data, y_plot, 'o', label='Data')
 
         fit_line = None
-        eq_text = None
 
         if auto_fit:
             best = choose_best_model(x_data, y_data)
@@ -284,7 +320,7 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
 
                 fit_line, = ax.plot(x_fit, y_fit, '-', label=f"{best['model']} fit")
 
-                # EC50 (quando aplicável)
+                # EC50 apenas quando aplicável
                 ec50 = None
                 if best['model'] == 'WeibullSurv':
                     A, lam, k, C = best['popt']
@@ -299,22 +335,18 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
                     eq_text += ("\n$EC_{50}$ ≈ %s" % format_equation_param(ec50))
 
                 # >>>> LEGENDA E EQUAÇÃO FORA, À DIREITA <<<<
-                # Reserva espaço à direita para o painel
                 plt.subplots_adjust(left=0.12, right=0.65)
 
-                # Equação/estatísticas no painel direito
                 fig.text(0.98, 0.5, eq_text,
                          fontsize=9, va='center', ha='right',
                          bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
-                # Legenda externa à direita (Data + Fit)
                 legend_handles = [data_line] + ([fit_line] if fit_line is not None else [])
                 legend_labels = ['Data'] + ([f"{best['model']} fit"] if fit_line is not None else [])
                 fig.legend(legend_handles, legend_labels,
                            loc='center right', bbox_to_anchor=(0.98, 0.8), frameon=True)
-
             else:
-                # Falha no fit: ainda usa layout com painel à direita e legenda externa com "Data"
+                # Falha no fit
                 plt.subplots_adjust(left=0.12, right=0.65)
                 fig.text(0.98, 0.5, f"Fit failed: {best.get('error','unknown')}",
                          fontsize=9, va='center', ha='right',
@@ -322,7 +354,7 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
                 fig.legend([data_line], ['Data'],
                            loc='center right', bbox_to_anchor=(0.98, 0.8), frameon=True)
 
-        # Quando NÃO usa --fit, mantém legenda padrão dentro do gráfico
+        # Quando NÃO usa --fit, mantém legenda interna
         if not auto_fit:
             ax.legend(loc='upper left')
 
@@ -356,7 +388,7 @@ def main():
     parser.add_argument('--n', action='store_true',
                         help='Normalize each ion to 100% in separate graphs (requires --s)')
     parser.add_argument('--fit', action='store_true',
-                        help='Auto-fit best model (Weibull/4PL/Exponential/Gompertz) on individual ion plots (requires --s)')
+                        help='Auto-fit best model (includes GaussianPeak and LogNormalPeak) on individual ion plots (requires --s)')
     parser.add_argument('--CE', action='store_true',
                         help='Convert HCD values to Collision Energy (eV)')
     parser.add_argument('--COM', action='store_true',
@@ -441,7 +473,6 @@ def main():
         if args.s:
             show_individual_plots(plot_df, energy_label, y_label_suffix, args.n, args.fit)
 
-    # Abre as janelas interativas; o usuário salva pelo UI do Matplotlib
     plt.show()
 
 if __name__ == "__main__":
