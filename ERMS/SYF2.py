@@ -98,7 +98,7 @@ def gompertz(x, A, b, c, C):
     """Gompertz-type decay: y = A * exp(-b * c**x) + C"""
     return A * np.exp(-b * (c ** x)) + C
 
-# NEW: peak-shaped models
+# Peak-shaped models
 def gaussian_peak(x, A, mu, sigma, C):
     """Gaussian peak in energy: y = C + A * exp(-(x-mu)^2 / (2*sigma^2))"""
     sigma = max(sigma, 1e-12)
@@ -136,7 +136,6 @@ MODEL_SPECS = {
         'bounds': ([0.0, 1e-3, 1e-3, -np.inf], [np.inf, 10.0, 10.0, np.inf]),
         'latex': lambda p: (r"$y= %s\,e^{-%s\,%s^{x}}+%s$" % tuple(map(format_equation_param, p)))
     },
-    # NEW models in --fit
     'GaussianPeak': {
         'fn': gaussian_peak,
         'p0': lambda x, y: [
@@ -146,7 +145,8 @@ MODEL_SPECS = {
             float(np.nanmin(y))                                            # C
         ],
         'bounds': ([0.0, 0.0, 1e-6, -np.inf], [np.inf, np.inf, 10.0, np.inf]),
-        'latex': lambda p: (r"$y= %s + %s\,e^{-\frac{(x-%s)^2}{2\,%s^2}}$"
+        # Mathtext-safe (no \!, \Big)
+        'latex': lambda p: (r"$y= %s + %s \exp\left(-\frac{(x-%s)^2}{2 %s^2}\right)$"
                             % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]])))
     },
     'LogNormalPeak': {
@@ -158,7 +158,8 @@ MODEL_SPECS = {
             float(np.nanmin(y))                                # C
         ],
         'bounds': ([0.0, -10.0, 1e-6, -np.inf], [np.inf, 10.0, 5.0, np.inf]),
-        'latex': lambda p: (r"$y= %s + %s\,\exp\!\Big(-\frac{(\ln x - %s)^2}{2\,%s^2}\Big)$"
+        # Mathtext-safe (no \!, \Big)
+        'latex': lambda p: (r"$y= %s + %s \exp\left(-\frac{(\ln x - %s)^2}{2 %s^2}\right)$"
                             % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]])))
     }
 }
@@ -197,6 +198,30 @@ def choose_best_model(x, y):
         return {'ok': False, 'error': '; '.join([r.get('error', 'fit failed') for r in results])}
     ok.sort(key=lambda r: (r['aic'], -r['r2']))
     return ok[0]
+
+# -----------------------------
+# Text rendering fallback
+# -----------------------------
+
+def _sanitize_for_plain(s: str) -> str:
+    """Remove TeX commands for a plain-text fallback if mathtext fails."""
+    s = s.replace('$', '')
+    s = s.replace(r'\exp', 'exp').replace(r'\ln', 'ln')
+    s = s.replace(r'\left', '').replace(r'\right', '')
+    s = s.replace(r'\,', ' ')
+    # remove any remaining backslash-commands
+    s = re.sub(r'\\[a-zA-Z]+', '', s)
+    # collapse multiple spaces
+    s = re.sub(r'\s{2,}', ' ', s)
+    return s
+
+def safe_figtext(fig, x, y, text, **kwargs):
+    """Try to render LaTeX; on error, render plain text so the UI never crashes."""
+    try:
+        return fig.text(x, y, text, **kwargs)
+    except Exception:
+        plain = _sanitize_for_plain(text) + "\n[rendered as plain text]"
+        return fig.text(x, y, plain, **kwargs)
 
 # -----------------------------
 # Core data extraction
@@ -305,7 +330,6 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
             y_label = f'Intensity{y_label_suffix}'
 
         data_line, = ax.plot(x_data, y_plot, 'o', label='Data')
-
         fit_line = None
 
         if auto_fit:
@@ -337,9 +361,12 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
                 # >>>> LEGENDA E EQUAÇÃO FORA, À DIREITA <<<<
                 plt.subplots_adjust(left=0.12, right=0.65)
 
-                fig.text(0.98, 0.5, eq_text,
-                         fontsize=9, va='center', ha='right',
-                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+                # Safe text draw (prevents mathtext crash)
+                safe_figtext(
+                    fig, 0.98, 0.5, eq_text,
+                    fontsize=9, va='center', ha='right',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.9)
+                )
 
                 legend_handles = [data_line] + ([fit_line] if fit_line is not None else [])
                 legend_labels = ['Data'] + ([f"{best['model']} fit"] if fit_line is not None else [])
@@ -348,9 +375,11 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
             else:
                 # Falha no fit
                 plt.subplots_adjust(left=0.12, right=0.65)
-                fig.text(0.98, 0.5, f"Fit failed: {best.get('error','unknown')}",
-                         fontsize=9, va='center', ha='right',
-                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+                safe_figtext(
+                    fig, 0.98, 0.5, f"Fit failed: {best.get('error','unknown')}",
+                    fontsize=9, va='center', ha='right',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.9)
+                )
                 fig.legend([data_line], ['Data'],
                            loc='center right', bbox_to_anchor=(0.98, 0.8), frameon=True)
 
