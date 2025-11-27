@@ -69,25 +69,32 @@ MODEL_SPECS = {
         'fn': four_pl,
         'p0': lambda x, y: [float(np.nanmax(y)), float(np.nanmin(y)), np.nanmedian(x), 3.0],
         'bounds': ([0, -np.inf, 0, 0.1], [np.inf, np.inf, np.inf, 20.0]),
-        'latex': lambda p: (r"$y= %s + \frac{%s-%s}{1+(x/%s)^{%s}}$" % tuple(map(format_equation_param, [p[1], p[0], p[1], p[2], p[3]])))
+        'latex': lambda p: (r"$y= %s + \frac{%s-%s}{1+(x/%s)^{%s}}$" %
+                            tuple(map(format_equation_param, [p[1], p[0], p[1], p[2], p[3]])))
     },
     'Exponential': {
         'fn': exp_decay,
         'p0': lambda x, y: [float(np.nanmax(y)), 1.0, float(np.nanmin(y))],
         'bounds': ([0.0, 0.0, -np.inf], [np.inf, 10.0, np.inf]),
-        'latex': lambda p: (r"$y= %s\,e^{-%s x}+%s$" % tuple(map(format_equation_param, p)))
+        'latex': lambda p: (r"$y= %s\,e^{-%s x}+%s$" %
+                            tuple(map(format_equation_param, p)))
     },
     'WeibullSurv': {
         'fn': weibull_surv,
-        'p0': lambda x, y: [float(np.nanmax(y)), max(1e-6, float(np.nanmedian(x))), 3.0, float(np.nanmin(y))],
+        'p0': lambda x, y: [float(np.nanmax(y)),
+                            max(1e-6, float(np.nanmedian(x))),
+                            3.0,
+                            float(np.nanmin(y))],
         'bounds': ([0.0, 1e-6, 0.1, -np.inf], [np.inf, 10.0, 20.0, np.inf]),
-        'latex': lambda p: (r"$y= %s\,e^{-(x/%s)^{%s}}+%s$" % tuple(map(format_equation_param, p)))
+        'latex': lambda p: (r"$y= %s\,e^{-(x/%s)^{%s}}+%s$" %
+                            tuple(map(format_equation_param, p)))
     },
     'Gompertz': {
         'fn': gompertz,
         'p0': lambda x, y: [float(np.nanmax(y)), 0.5, 1.5, float(np.nanmin(y))],
         'bounds': ([0.0, 1e-3, 1e-3, -np.inf], [np.inf, 10.0, 10.0, np.inf]),
-        'latex': lambda p: (r"$y= %s\,e^{-%s\,%s^{x}}+%s$" % tuple(map(format_equation_param, p)))
+        'latex': lambda p: (r"$y= %s\,e^{-%s\,%s^{x}}+%s$" %
+                            tuple(map(format_equation_param, p)))
     }
 }
 
@@ -130,10 +137,24 @@ def choose_best_model(x, y):
 # Core data extraction
 # -----------------------------
 
-def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False):
+def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False,
+                       precursor_mz=None):
+    """
+    Read mzML files, aggregate intensities and compute HCD/CE/CECOM.
+    precursor_mz: if provided, used as the precursor mass for CE_COM;
+                  otherwise falls back to max(target_ions) with a warning
+                  when use_com is True.
+    """
     abs_results = {}
     rel_results = {}
-    precursor_mass = max(target_ions) if target_ions else 0
+
+    if precursor_mz is not None:
+        precursor_mass = float(precursor_mz)
+    else:
+        precursor_mass = max(target_ions) if target_ions else 0
+        if use_ce and use_com and precursor_mass > 0:
+            print(f"[WARNING] Using max(target_ions)={precursor_mass:.4f} as precursor mass for CECOM. "
+                  f"Use --precursor-mz to specify the true precursor m/z.")
 
     for filename in os.listdir(folder_path):
         if filename.endswith('.mzML') or filename.endswith('.mzml'):
@@ -182,25 +203,28 @@ def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False):
     return abs_results, rel_results, energy_key, precursor_mass
 
 # -----------------------------
-# Plotting (now only SHOW, not SAVE)
+# Plotting (SHOW only)
 # -----------------------------
 
-def show_combined_plot(df, energy_label, y_label_suffix=''):  # CHANGED: renamed and now returns fig
+def show_combined_plot(df, energy_label, y_label_suffix=''):
     fig = plt.figure(figsize=(10, 6))
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
     for ion in ion_columns:
         plt.plot(df[energy_label], df[ion], 'o-', label=f'm/z {ion}')
-    xlabel = r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else ('CE (eV)' if energy_label == 'CE' else 'HCD')
+    xlabel = (r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM'
+              else ('CE (eV)' if energy_label == 'CE' else 'HCD'))
     plt.xlabel(xlabel)
     plt.ylabel(f'Intensity{y_label_suffix}')
-    title = r'Ion Intensities vs. CE$_{\mathrm{COM}}$' if energy_label == 'CECOM' else f'Ion Intensities vs. {energy_label}'
+    title = (r'Ion Intensities vs. CE$_{\mathrm{COM}}$'
+             if energy_label == 'CECOM'
+             else f'Ion Intensities vs. {energy_label}')
     plt.title(title)
     plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.grid(True)
     plt.tight_layout()
     return fig
 
-def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, auto_fit=False):  # CHANGED
+def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, auto_fit=False):
     figs = []
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
     for ion in ion_columns:
@@ -250,14 +274,18 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
                          fontsize=9, va='center', ha='right',
                          bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
             else:
-                plt.text(0.98, 0.5, f"Fit failed: {best.get('error','unknown')}", transform=plt.gca().transAxes,
+                plt.text(0.98, 0.5, f"Fit failed: {best.get('error','unknown')}",
+                         transform=plt.gca().transAxes,
                          fontsize=9, va='center', ha='right',
                          bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        xlabel = r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else ('CE (eV)' if energy_label == 'CE' else 'HCD')
+        xlabel = (r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM'
+                  else ('CE (eV)' if energy_label == 'CE' else 'HCD'))
         plt.xlabel(xlabel)
         plt.ylabel(y_label)
-        title = rf'Ion Intensity vs. CE$_{{\mathrm{{COM}}}}$ (m/z {ion})' if energy_label == 'CECOM' else f'Ion Intensity vs. {energy_label} (m/z {ion})'
+        title = (rf'Ion Intensity vs. CE$_{{\mathrm{{COM}}}}$ (m/z {ion})'
+                 if energy_label == 'CECOM'
+                 else f'Ion Intensity vs. {energy_label} (m/z {ion})')
         plt.title(title)
         plt.grid(True)
         plt.legend(loc='upper left')
@@ -270,18 +298,29 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
 # -----------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description='Extract ion intensities from .mzML files and plot them. Optionally save CSV.')
+    parser = argparse.ArgumentParser(
+        description='Extract ion intensities from .mzML files and plot them. Optionally save CSV.'
+    )
     parser.add_argument('folder_path', help='Path to the folder containing .mzML files')
     parser.add_argument('ions', help='List of target ion masses (comma-separated)')
-    # REMOVED --plot  # CHANGED
-    parser.add_argument('--csv', action='store_true', help='Save results to CSV (default: do not save)')  # NEW
-    parser.add_argument('--r', action='store_true', help='Use relative intensities instead of absolute')
-    parser.add_argument('--s', action='store_true', help='Open a separate graph window for each ion (in addition to combined plot)')
-    parser.add_argument('--n', action='store_true', help='Normalize each ion to 100% in separate graphs (requires --s)')
-    parser.add_argument('--fit', action='store_true', help='Auto-fit best model (Weibull/4PL/Exponential/Gompertz) on individual ion plots (requires --s)')
-    parser.add_argument('--CE', action='store_true', help='Convert HCD values to Collision Energy (eV)')
-    parser.add_argument('--COM', action='store_true', help='Use Center of Mass collision energy (requires --CE)')
-    parser.add_argument('--tog', help='Only plot the combined graph for specified ion masses (comma-separated)')
+    parser.add_argument('--csv', action='store_true',
+                        help='Save results to CSV (default: do not save)')
+    parser.add_argument('--r', action='store_true',
+                        help='Use relative intensities instead of absolute')
+    parser.add_argument('--s', action='store_true',
+                        help='Open a separate graph window for each ion (in addition to combined plot)')
+    parser.add_argument('--n', action='store_true',
+                        help='Normalize each ion to 100% in separate graphs (requires --s)')
+    parser.add_argument('--fit', action='store_true',
+                        help='Auto-fit best model (Weibull/4PL/Exponential/Gompertz) on individual ion plots (requires --s)')
+    parser.add_argument('--CE', action='store_true',
+                        help='Convert HCD values to Collision Energy (eV)')
+    parser.add_argument('--COM', action='store_true',
+                        help='Use Center of Mass collision energy (requires --CE)')
+    parser.add_argument('--precursor-mz', type=float,
+                        help='Precursor m/z used for CE_COM calculation (required with --COM)')
+    parser.add_argument('--tog',
+                        help='Only plot the combined graph for specified ion masses (comma-separated)')
 
     args = parser.parse_args()
 
@@ -291,6 +330,8 @@ def main():
         parser.error("--fit requires --s to be specified")
     if args.COM and not args.CE:
         parser.error("--COM requires --CE to be specified")
+    if args.COM and args.precursor_mz is None:
+        parser.error("--COM requires --precursor-mz to be specified (precursor m/z)")
 
     if args.tog:
         args.s = False
@@ -307,7 +348,8 @@ def main():
         parser.error("At least one ion mass must be specified")
 
     abs_results, rel_results, energy_label, precursor_mass = process_mzml_files(
-        args.folder_path, target_ions, args.CE, args.COM
+        args.folder_path, target_ions, args.CE, args.COM,
+        precursor_mz=args.precursor_mz
     )
 
     if not abs_results:
@@ -326,7 +368,7 @@ def main():
     rel_df = rel_df[energy_cols + other_cols]
 
     # Save CSV only if requested
-    if args.csv:  # NEW
+    if args.csv:
         output_folder = 'SYF_output'
         os.makedirs(output_folder, exist_ok=True)
         output_basename = f'ion_intensities_by_{energy_label.lower()}{"_relative" if args.r else ""}'
@@ -334,9 +376,10 @@ def main():
         (rel_df if args.r else abs_df).to_csv(csv_path, index=False)
         print(f"Results saved to {csv_filename}")
 
-    print(f"Precursor mass used for CECOM calculation: {precursor_mass:.4f} m/z")
+    if args.COM:
+        print(f"Precursor mass used for CECOM calculation: {precursor_mass:.4f} m/z")
 
-    # Always plot (open windows)  # NEW default
+    # Always plot (open windows)
     plot_df = rel_df if args.r else abs_df
     y_label_suffix = ' (Relative)' if args.r else ' (Absolute)'
 
@@ -349,8 +392,7 @@ def main():
         if args.s:
             show_individual_plots(plot_df, energy_label, y_label_suffix, args.n, args.fit)
 
-    # Open interactive windows so the user can save via the UI
-    plt.show()  # NEW
+    plt.show()
 
 if __name__ == "__main__":
     main()

@@ -48,7 +48,11 @@ def aggregate_intensity_for_target(spectrum, target_mz, mtol, use_ppm=False,
     - mtol: tolerância (Da por padrão; ppm se use_ppm=True)
     - use_ppm: se True, converte mtol para Da baseado em target_mz.
     - agg: 'sum', 'mean', 'max' ou 'gauss' (peso gaussiano em torno de target_mz)
+<<<<<<< HEAD
     - gauss_sigma: fração de mtol usada como sigma no peso gaussiano.
+=======
+    - gauss_sigma_frac: fração de mtol usada como sigma no peso gaussiano.
+>>>>>>> 8f8a829 (Updated SYF)
     """
     mz = spectrum.get('m/z array', np.array([]))
     I = spectrum.get('intensity array', np.array([]))
@@ -57,6 +61,10 @@ def aggregate_intensity_for_target(spectrum, target_mz, mtol, use_ppm=False,
         return 0.0
 
     if use_ppm:
+<<<<<<< HEAD
+=======
+        # mtol em ppm -> converte para Da
+>>>>>>> 8f8a829 (Updated SYF)
         da_tol = target_mz * mtol * 1e-6
     else:
         da_tol = mtol
@@ -76,10 +84,19 @@ def aggregate_intensity_for_target(spectrum, target_mz, mtol, use_ppm=False,
     elif agg == 'mean':
         return float(np.mean(I_w))
     elif agg == 'gauss':
+<<<<<<< HEAD
         sigma = max(gauss_sigma * da_tol, 1e-12)
         weights = np.exp(-0.5 * ((mz_w - target_mz) / sigma) ** 2)
         return float(np.sum(I_w * weights))
     else:
+=======
+        # Peso gaussiano centrado em target_mz
+        sigma = max(gauss_sigma_frac * da_tol, 1e-12)
+        weights = np.exp(-0.5 * ((mz_w - target_mz) / sigma) ** 2)
+        return float(np.sum(I_w * weights))
+    else:
+        # soma simples
+>>>>>>> 8f8a829 (Updated SYF)
         return float(np.sum(I_w))
 
 # -----------------------------
@@ -155,13 +172,22 @@ MODEL_SPECS = {
             max((np.nanmax(x) - np.nanmin(x)) / 10.0, 1e-6),
             float(np.nanmin(y))
         ],
+<<<<<<< HEAD
         'bounds': ([0.0, 0.0, 1e-6, -np.inf], [np.inf, np.inf, 10.0, np.inf]),
         'latex': lambda p: (r"$y= %s + %s \exp\left(-\frac{(x-%s)^2}{2 %s^2}\right)$"
+=======
+        'bounds': (
+            [-np.inf, 0.0, 1e-6, -np.inf],
+            [np.inf, np.inf, 10.0, np.inf]
+        ),
+        'latex': lambda p: (r"$y= %s + %s \exp\left(-\frac{(x-%s)^2}{2\,%s^2}\right)$"
+>>>>>>> 8f8a829 (Updated SYF)
                             % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]])))
     },
     'LogNormalPeak': {
         'fn': lognormal_peak,
         'p0': lambda x, y: [
+<<<<<<< HEAD
             max(1e-9, float(np.nanmax(y) - np.nanmin(y))),
             float(np.log(max(1e-12, x[np.nanargmax(y)]))),
             0.3,
@@ -169,8 +195,20 @@ MODEL_SPECS = {
         ],
         'bounds': ([0.0, -10.0, 1e-6, -np.inf], [np.inf, 10.0, 5.0, np.inf]),
         'latex': lambda p: (r"$y= %s + %s \exp\left(-\frac{(\ln x - %s)^2}{2 %s^2}\right)$"
+=======
+            float(np.nanmax(y) - np.nanmin(y)),
+            float(np.log(x[np.nanargmax(y)]) if np.any((x > 0) & ~np.isnan(y)) else 0.0),
+            1.0,
+            float(np.nanmin(y))
+        ],
+        'bounds': (
+            [-np.inf, -10.0, 1e-6, -np.inf],
+            [np.inf, 10.0, 10.0, np.inf]
+        ),
+        'latex': lambda p: (r"$y= %s + %s \exp\left(-\frac{(\ln x-%s)^2}{2\,%s^2}\right)$"
+>>>>>>> 8f8a829 (Updated SYF)
                             % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]])))
-    }
+    },
 }
 
 def compute_rsquared(y, y_fit):
@@ -249,18 +287,33 @@ def safe_figtext(fig, x, y, text, **kwargs):
 # -----------------------------
 
 def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False,
+<<<<<<< HEAD
                        mtol=0.01, ppm_mode=False, agg_mode='sum',
                        gauss_sigma=0.5, precursor_mz=None):
     abs_results = {}
     rel_results = {}
 
+=======
+                       mtol=0.01, ppm_mode=False, agg_mode='sum', gauss_sigma=0.5, precursor_mz=None):
+    """
+    Lê todos os .mzML com padrão HCDXX e agrega intensidades dos íons-alvo com tolerância.
+    Retorna dicionários para intensidades absolutas e relativas e o rótulo de energia (HCD/CE/CECOM).
+    """
+    abs_results = {}
+    rel_results = {}
+    # Define precursor mass for CE_COM calculation
+>>>>>>> 8f8a829 (Updated SYF)
     if precursor_mz is not None:
         precursor_mass = float(precursor_mz)
     else:
         precursor_mass = max(target_ions) if target_ions else 0
         if use_com and precursor_mass > 0:
             print(f"[WARNING] Using max(target_ions)={precursor_mass:.4f} as precursor mass. "
+<<<<<<< HEAD
                   f"Use --precursor-mz for correct CECOM.")
+=======
+                  f"Use --precursor-mz to specify the true precursor m/z.")
+>>>>>>> 8f8a829 (Updated SYF)
 
     for filename in os.listdir(folder_path):
         if not (filename.endswith('.mzML') or filename.endswith('.mzml')):
@@ -351,6 +404,7 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
         if normalize:
             max_intensity = np.nanmax(y_data)
             if max_intensity > 0:
+<<<<<<< HEAD
                 y_plot = (y_data / max_intensity) * 100.0
                 y_label = f'Intensity{y_label_suffix} (Normalized to 100%)'
             else:
@@ -361,10 +415,21 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
             y_label = f'Intensity{y_label_suffix}'
 
         data_line, = ax.plot(x_data, y_plot, 'o', label=f'Experimental m/z {ion}')
+=======
+                y_data = (y_data / max_intensity) * 100.0
+                y_label = f'Intensity{y_label_suffix} (Normalized to 100%)'
+            else:
+                y_label = f'Intensity{y_label_suffix}'
+        else:
+            y_label = f'Intensity{y_label_suffix}'
+
+        ax.plot(x_data, y_data, 'o', label=f'Experimental m/z {ion}')
+>>>>>>> 8f8a829 (Updated SYF)
 
         best_model = None
         if auto_fit:
             best_model = fit_all_models(x_data, y_data)
+<<<<<<< HEAD
             if best_model.get('name'):
                 model_name = best_model['name']
                 params = best_model['params']
@@ -405,6 +470,17 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
 
         xlabel = r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else ('CE (eV)' if energy_label == 'CE' else 'HCD')
         ax.set_xlabel(xlabel)
+=======
+            if best_model.get('ok', True):
+                y_fit = best_model['y_fit']
+                label = f"Best fit: {best_model['name']} (R² = {best_model['r2']:.4f}, AIC = {best_model['aic']:.2f})"
+                ax.plot(x_data, y_fit, '-', label=label)
+                eq_text = best_model['latex'] + f"\n$R^2 = {best_model['r2']:.4f}$\nAIC = {best_model['aic']:.2f}"
+                box = dict(boxstyle='round', facecolor='white', alpha=0.8)
+                safe_figtext(fig, 0.05, 0.95, eq_text, fontsize=10, verticalalignment='top', bbox=box)
+
+        ax.set_xlabel(r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else energy_label)
+>>>>>>> 8f8a829 (Updated SYF)
         ax.set_ylabel(y_label)
         title = rf'Ion Intensity vs. CE$_{{\mathrm{{COM}}}}$ (m/z {ion})' if energy_label == 'CECOM' else f'Ion Intensity vs. {energy_label} (m/z {ion})'
         ax.set_title(title)
@@ -432,7 +508,11 @@ def main():
     parser.add_argument('--n', action='store_true',
                         help='Normalize each ion to 100% in separate graphs (requires --s)')
     parser.add_argument('--fit', action='store_true',
+<<<<<<< HEAD
                         help='Auto-fit best model on individual ion plots (requires --s)')
+=======
+                        help='Auto-fit best model (includes GaussPeak and LogNormalPeak) on individual ion plots (requires --s)')
+>>>>>>> 8f8a829 (Updated SYF)
     parser.add_argument('--CE', action='store_true',
                         help='Convert HCD values to Collision Energy (eV)')
     parser.add_argument('--COM', action='store_true',
@@ -478,9 +558,14 @@ def main():
 
     abs_results, rel_results, energy_label, precursor_mass = process_mzml_files(
         args.folder_path, target_ions, args.CE, args.COM,
+<<<<<<< HEAD
         mtol=args.mtol, ppm_mode=args.ppm,
         agg_mode=args.agg, gauss_sigma=args.gauss_sigma,
         precursor_mz=args.precursor_mz
+=======
+        mtol=args.mtol, ppm_mode=args.ppm, agg_mode=args.agg,
+        gauss_sigma=args.gauss_sigma, precursor_mz=args.precursor_mz
+>>>>>>> 8f8a829 (Updated SYF)
     )
 
     if not abs_results:
