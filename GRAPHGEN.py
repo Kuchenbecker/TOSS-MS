@@ -156,13 +156,45 @@ def eq_text_tex(name, params, degree=None):
         A,mu,sig,C = p; return rf"y = {fmt(C)} + {fmt(A)}\,\exp\!\left(-\frac{{(\ln x - {fmt(mu)})^2}}{{2\,{fmt(sig)}^2}}\right)"
     return "y = f(x)"
 
+# ---------- Helper: load & plot one CSV ----------
+def _load_xy_from_csv(path, x_col_idx, y_col_idx):
+    df = pd.read_csv(path)
+    if len(df.columns) < 2:
+        raise ValueError(f"{path}: CSV must have at least 2 columns.")
+    x = pd.to_numeric(df.iloc[:, x_col_idx], errors="coerce").to_numpy()
+    y = pd.to_numeric(df.iloc[:, y_col_idx], errors="coerce").to_numpy()
+    m = np.isfinite(x) & np.isfinite(y)
+    return df, x[m], y[m]
+
+def _plot_single_series(ax, x, y, label, show_vals=False, connect=False, color=None):
+    sc = ax.scatter(x, y, label=label, color=color)
+    if connect and len(x) > 1:
+        order = np.argsort(x)
+        ax.plot(x[order], y[order], linestyle='-', marker=None, label=f"{label} (connected)", color=color)
+    if show_vals and len(y) > 0:
+        sorted_idx = np.argsort(y)
+        seen = {}
+        y_span = float(np.nanmax(y) - np.nanmin(y)) if len(y) else 1.0
+        for idx in sorted_idx:
+            yv = y[idx]
+            offn = seen.get(yv, 0); off = offn * 0.03 * y_span
+            seen[yv] = offn + 1
+            ax.annotate(f'{yv:.2f}', (x[idx], yv + off),
+                        fontsize=12, ha='center', va='bottom',
+                        xytext=(0, 5), textcoords='offset points',
+                        color='darkgreen')
+    return sc
+
 def main():
     parser = argparse.ArgumentParser(description='Plot CSV data with optional curve fitting.')
-    parser.add_argument('filename', help='Path to the CSV file')
+    # filename becomes optional if --multi is used
+    parser.add_argument('filename', nargs='?', help='Path to the CSV file')
+    parser.add_argument('--multi', type=str,
+                        help='Comma-separated list of CSVs to overlay (e.g., a.csv,b.csv,c.csv)')
     parser.add_argument('--fit', choices=[
         'linear','quadratic','poly','log','ln','exp','sig',
         '4pl','expdecay','weibull','gompertz','gauss','lognormal'
-    ], help='Type of function to fit')
+    ], help='Type of function to fit (applied to each series independently)')
     parser.add_argument('--polydeg', type=int, default=2, help='Degree of polynomial fit')
     parser.add_argument('--outdir', type=str, default=None, help='Path to save output file (supports .png or .svg)')
     parser.add_argument('--title', type=str, help='Title for the plot')
@@ -176,150 +208,147 @@ def main():
 
     args = parser.parse_args()
 
-    # --- Load data
-    try:
-        data = pd.read_csv(args.filename)
-    except Exception as e:
-        print(f"Error reading CSV file: {e}")
-        return
-    if len(data.columns) < 2:
-        print("Error: CSV file must have at least 2 columns")
-        return
-
-    # --- Resolve columns
-    y_col = args.yaxis - 1
-    if not (0 <= y_col < len(data.columns)):
-        print(f"Error: yaxis value {args.yaxis} is out of range.")
-        return
-
-    if args.xaxis is not None:
-        x_col = args.xaxis - 1
-        if not (0 <= x_col < len(data.columns)):
-            print(f"Error: xaxis value {args.xaxis} is out of range.")
+    # --- Determine input mode
+    series_files = None
+    if args.multi:
+        # split by comma and strip whitespace
+        series_files = [p.strip() for p in args.multi.split(',') if p.strip()]
+        if len(series_files) == 0:
+            print("Error: --multi provided but no CSV paths parsed.")
             return
-        if x_col == y_col:
-            print("Error: --xaxis and --yaxis refer to the same column.")
-            return
+    elif args.filename:
+        series_files = [args.filename]
     else:
-        x_col = 0 if y_col != 0 else (1 if len(data.columns) > 1 else 0)
+        print("Error: provide a CSV filename or use --multi with a list of CSVs.")
+        return
 
-    # --- Extract numeric arrays
-    x = pd.to_numeric(data.iloc[:, x_col], errors="coerce").to_numpy()
-    y = pd.to_numeric(data.iloc[:, y_col], errors="coerce").to_numpy()
-    mask = np.isfinite(x) & np.isfinite(y)
-    x, y = x[mask], y[mask]
+    # --- We'll use the SAME column selections for all series
+    # Resolve column indexes later per-file after reading first file to name axes
+    # Provisional labels
+    x_label = args.xlabel
+    y_label = args.ylabel
 
-    x_label = args.xlabel if args.xlabel else str(data.columns[x_col])
-    y_label = args.ylabel if args.ylabel else str(data.columns[y_col])
-
-    # Optional right-axis labels aligned to Y
-    dlabel_values = None
-    if args.dlabel and str(args.dlabel).isdigit():
-        dlabel_col = int(args.dlabel) - 1
-        if 0 <= dlabel_col < len(data.columns):
-            dlabel_values = data.iloc[:, dlabel_col].astype(str).to_numpy()[mask]
-        else:
-            print(f"Warning: dlabel column {args.dlabel} out of range")
-
-    # --- Figure & axes
     fig, ax = plt.subplots(figsize=(10, 6))
-    # room for legend (right) and LaTeX banner (top)
     plt.subplots_adjust(right=0.78, top=0.82)
 
-    # Scatter
-    ax.scatter(x, y, label='Data')
+    # plot each series
+    banners = []  # one per series if fitting
+    color_cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', None)
 
-    # Optional point labels
-    if args.show and len(y) > 0:
-        sorted_idx = np.argsort(y)
-        seen = {}
-        y_span = float(np.nanmax(y) - np.nanmin(y)) if len(y) else 1.0
-        for idx in sorted_idx:
-            yv = y[idx]
-            offn = seen.get(yv, 0); off = offn * 0.03 * y_span
-            seen[yv] = offn + 1
-            ax.annotate(f'{yv:.2f}', (x[idx], yv + off),
-                        fontsize=12, ha='center', va='bottom',
-                        xytext=(0, 5), textcoords='offset points',
-                        color='darkgreen')
-
-    # Right-side Y-axis labels
-    if dlabel_values is not None and len(dlabel_values) == len(y):
-        ax2 = ax.twinx()
-        ax2.set_ylim(ax.get_ylim())
-        ax2.set_yticks(y)
-        ax2.set_yticklabels(dlabel_values, fontsize=label_fontsize)
-        ax2.tick_params(axis='y', which='both', length=0)
-        ax2.set_ylabel("Labels", fontsize=label_fontsize)
-
-    # Connect (no fit)
-    if args.connect and len(x) > 1:
-        order = np.argsort(x)
-        ax.plot(x[order], y[order], linestyle='-', marker=None, label='Connected points')
-
-    # Fit + LaTeX top banner
-    banner = None
-    if args.fit:
+    for idx, path in enumerate(series_files):
         try:
-            fit = args.fit
-            xx, yy = x.copy(), y.copy()
-
-            if fit == 'linear':
-                popt, _ = curve_fit(linear_func, xx, yy); y_fit = linear_func(xx, *popt)
-            elif fit == 'quadratic':
-                popt, _ = curve_fit(quadratic_func, xx, yy); y_fit = quadratic_func(xx, *popt)
-            elif fit == 'poly':
-                popt = np.polyfit(xx, yy, args.polydeg); y_fit = polynomial_func(xx, *popt)
-            elif fit == 'log':
-                m = xx > 0; popt, _ = curve_fit(log_func, xx[m], yy[m]); y_fit = log_func(xx, *popt)
-            elif fit == 'ln':
-                m = xx > 0; popt, _ = curve_fit(ln_func, xx[m], yy[m]); y_fit = ln_func(xx, *popt)
-            elif fit == 'exp':
-                popt, _ = curve_fit(exp_func, xx, yy, p0=(1, 0.1, 0)); y_fit = exp_func(xx, *popt)
-            elif fit == 'sig':
-                popt, _ = curve_fit(sigmoid_func, xx, yy, p0=(1, 1, np.nanmean(xx), 0)); y_fit = sigmoid_func(xx, *popt)
-            elif fit == '4pl':
-                p0 = p0_4pl(xx, yy); bounds = ([-np.inf, -np.inf, 1e-9, 1e-6], [np.inf, np.inf, np.inf, np.inf])
-                popt, _ = curve_fit(four_pl, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = four_pl(xx, *popt)
-            elif fit == 'expdecay':
-                p0 = p0_expdecay(xx, yy); bounds = ([-np.inf, 0.0, -np.inf], [np.inf, np.inf, np.inf])
-                popt, _ = curve_fit(exp_decay, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = exp_decay(xx, *popt)
-            elif fit == 'weibull':
-                p0 = p0_weibull(xx, yy); bounds = ([-np.inf, 1e-9, 1e-9, -np.inf], [np.inf, np.inf, np.inf, np.inf])
-                popt, _ = curve_fit(weibull_surv, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = weibull_surv(xx, *popt)
-            elif fit == 'gompertz':
-                p0 = p0_gompertz(xx, yy); bounds = ([-np.inf, 1e-12, 1e-12, -np.inf], [np.inf, np.inf, np.inf, np.inf])
-                popt, _ = curve_fit(gompertz, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = gompertz(xx, *popt)
-            elif fit == 'gauss':
-                p0 = p0_gauss(xx, yy); bounds = ([-np.inf, -np.inf, 1e-9, -np.inf], [np.inf, np.inf, np.inf, np.inf])
-                popt, _ = curve_fit(gaussian_peak, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = gaussian_peak(xx, *popt)
-            elif fit == 'lognormal':
-                m = xx > 0; p0 = p0_lognormal(xx[m], yy[m]); bounds = ([-np.inf, -np.inf, 1e-9, -np.inf], [np.inf, np.inf, np.inf, np.inf])
-                popt, _ = curve_fit(lognormal_peak, xx[m], yy[m], p0=p0, bounds=bounds, maxfev=20000); y_fit = lognormal_peak(xx, *popt)
-            else:
-                raise ValueError("Unknown fit type")
-
-            ax.plot(xx, y_fit, 'r-', label='Fitted curve')
-
-            # R² on points used for fit (ignore non-finite y_fit)
-            valid = np.isfinite(y_fit)
-            r2 = r2_score(yy[valid], y_fit[valid])
-
-            # Build LaTeX-like banner (mathtext)
-            fit_key = 'poly' if fit == 'poly' else fit
-            eq_tex = eq_text_tex(fit_key, popt, degree=(args.polydeg if fit == 'poly' else None))
-            banner = rf"${eq_tex}$" + "\n" + rf"$R^2 = {r2:.4f}$"
-
-            # Also print to console
-            print("Equation:", eq_tex)
-            print(f"R^2: {r2:.6f}")
-
+            # Read dataframe to get column names
+            df = pd.read_csv(path)
         except Exception as e:
-            print(f"Error during fitting: {e}")
+            print(f"Error reading '{path}': {e}")
+            continue
+
+        # Resolve columns indices
+        y_col = args.yaxis - 1
+        if not (0 <= y_col < len(df.columns)):
+            print(f"Error: yaxis {args.yaxis} out of range for '{path}'.")
+            continue
+        if args.xaxis is not None:
+            x_col = args.xaxis - 1
+            if not (0 <= x_col < len(df.columns)):
+                print(f"Error: xaxis {args.xaxis} out of range for '{path}'.")
+                continue
+            if x_col == y_col:
+                print(f"Error: --xaxis and --yaxis refer to the same column in '{path}'.")
+                continue
+        else:
+            x_col = 0 if y_col != 0 else (1 if len(df.columns) > 1 else 0)
+
+        # Labels (use first file to set default axis labels if not provided)
+        if x_label is None: x_label = str(df.columns[x_col])
+        if y_label is None: y_label = str(df.columns[y_col])
+
+        # Extract numeric arrays with same masking logic
+        x = pd.to_numeric(df.iloc[:, x_col], errors="coerce").to_numpy()
+        y = pd.to_numeric(df.iloc[:, y_col], errors="coerce").to_numpy()
+        mask = np.isfinite(x) & np.isfinite(y)
+        x, y = x[mask], y[mask]
+
+        color = None if color_cycle is None else color_cycle[idx % len(color_cycle)]
+        label = os.path.splitext(os.path.basename(path))[0]
+
+        _plot_single_series(ax, x, y, label=label, show_vals=args.show, connect=args.connect, color=color)
+
+        # Right-axis labels (desaconselhado com multi, mas suportado se houver apenas 1 série)
+        if args.dlabel and len(series_files) == 1 and str(args.dlabel).isdigit():
+            dlabel_col = int(args.dlabel) - 1
+            if 0 <= dlabel_col < len(df.columns):
+                dvals = df.iloc[:, dlabel_col].astype(str).to_numpy()[mask]
+                ax2 = ax.twinx()
+                ax2.set_ylim(ax.get_ylim())
+                ax2.set_yticks(y)
+                ax2.set_yticklabels(dvals, fontsize=label_fontsize)
+                ax2.tick_params(axis='y', which='both', length=0)
+                ax2.set_ylabel("Labels", fontsize=label_fontsize)
+            else:
+                print(f"Warning: dlabel column {args.dlabel} out of range for '{path}'")
+
+        # Optional fitting per series (independent)
+        if args.fit:
+            try:
+                fit = args.fit
+                xx, yy = x.copy(), y.copy()
+
+                if fit == 'linear':
+                    popt, _ = curve_fit(linear_func, xx, yy); y_fit = linear_func(xx, *popt)
+                elif fit == 'quadratic':
+                    popt, _ = curve_fit(quadratic_func, xx, yy); y_fit = quadratic_func(xx, *popt)
+                elif fit == 'poly':
+                    popt = np.polyfit(xx, yy, args.polydeg); y_fit = polynomial_func(xx, *popt)
+                elif fit == 'log':
+                    m = xx > 0; popt, _ = curve_fit(log_func, xx[m], yy[m]); y_fit = log_func(xx, *popt)
+                elif fit == 'ln':
+                    m = xx > 0; popt, _ = curve_fit(ln_func, xx[m], yy[m]); y_fit = ln_func(xx, *popt)
+                elif fit == 'exp':
+                    popt, _ = curve_fit(exp_func, xx, yy, p0=(1, 0.1, 0)); y_fit = exp_func(xx, *popt)
+                elif fit == 'sig':
+                    popt, _ = curve_fit(sigmoid_func, xx, yy, p0=(1, 1, np.nanmean(xx), 0)); y_fit = sigmoid_func(xx, *popt)
+                elif fit == '4pl':
+                    p0 = p0_4pl(xx, yy); bounds = ([-np.inf, -np.inf, 1e-9, 1e-6], [np.inf, np.inf, np.inf, np.inf])
+                    popt, _ = curve_fit(four_pl, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = four_pl(xx, *popt)
+                elif fit == 'expdecay':
+                    p0 = p0_expdecay(xx, yy); bounds = ([-np.inf, 0.0, -np.inf], [np.inf, np.inf, np.inf])
+                    popt, _ = curve_fit(exp_decay, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = exp_decay(xx, *popt)
+                elif fit == 'weibull':
+                    p0 = p0_weibull(xx, yy); bounds = ([-np.inf, 1e-9, 1e-9, -np.inf], [np.inf, np.inf, np.inf, np.inf])
+                    popt, _ = curve_fit(weibull_surv, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = weibull_surv(xx, *popt)
+                elif fit == 'gompertz':
+                    p0 = p0_gompertz(xx, yy); bounds = ([-np.inf, 1e-12, 1e-12, -np.inf], [np.inf, np.inf, np.inf, np.inf])
+                    popt, _ = curve_fit(gompertz, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = gompertz(xx, *popt)
+                elif fit == 'gauss':
+                    p0 = p0_gauss(xx, yy); bounds = ([-np.inf, -np.inf, 1e-9, -np.inf], [np.inf, np.inf, np.inf, np.inf])
+                    popt, _ = curve_fit(gaussian_peak, xx, yy, p0=p0, bounds=bounds, maxfev=20000); y_fit = gaussian_peak(xx, *popt)
+                elif fit == 'lognormal':
+                    m = xx > 0; p0 = p0_lognormal(xx[m], yy[m]); bounds = ([-np.inf, -np.inf, 1e-9, -np.inf], [np.inf, np.inf, np.inf, np.inf])
+                    popt, _ = curve_fit(lognormal_peak, xx[m], yy[m], p0=p0, bounds=bounds, maxfev=20000); y_fit = lognormal_peak(xx, *popt)
+                else:
+                    raise ValueError("Unknown fit type")
+
+                # plot fitted curve for the series with matching color
+                ax.plot(xx, y_fit, '-', label=f'{label} (fit: {args.fit})', color=color)
+
+                # R² only printed to console for each series
+                valid = np.isfinite(y_fit)
+                r2 = r2_score(yy[valid], y_fit[valid])
+                fit_key = 'poly' if fit == 'poly' else fit
+                eq_tex = eq_text_tex(fit_key, popt, degree=(args.polydeg if fit == 'poly' else None))
+                print(f"[{label}] Equation:", eq_tex)
+                print(f"[{label}] R^2: {r2:.6f}")
+
+                # If there is a single series, keep the top banner like before.
+                if len(series_files) == 1:
+                    banners.append(rf"${eq_tex}$" + "\n" + rf"$R^2 = {r2:.4f}$")
+            except Exception as e:
+                print(f"Error during fitting for '{path}': {e}")
 
     # Labels/title/grid
-    ax.set_xlabel(x_label, fontsize=label_fontsize)
-    ax.set_ylabel(y_label, fontsize=label_fontsize)
+    ax.set_xlabel(x_label if x_label else "X", fontsize=label_fontsize)
+    ax.set_ylabel(y_label if y_label else "Y", fontsize=label_fontsize)
     if args.title:
         ax.set_title(args.title, fontsize=title_fontsize)
     ax.grid(True)
@@ -330,9 +359,9 @@ def main():
         ax.legend(handles, labels, loc='center left',
                   bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0, frameon=True)
 
-    # Top banner (LaTeX equation + R²), above and outside the axes
-    if banner:
-        fig.text(0.5, 0.98, banner, ha='center', va='top',
+    # Top banner only for o modo single (para não poluir quando há muitas séries)
+    if len(banners) == 1:
+        fig.text(0.5, 0.98, banners[0], ha='center', va='top',
                  fontsize=eq_fontsize,
                  bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, linewidth=0.5))
 
