@@ -41,12 +41,11 @@ def extract_hcd_value(filename):
 # Peak aggregation with tolerance
 # -----------------------------
 
-def aggregate_intensity_for_target(spectrum, target_mz, mtol, use_ppm=False,
+def aggregate_intensity_for_target(spectrum, target_mz, mtol,
                                    agg='sum', gauss_sigma=0.5):
     """
     Agrega a intensidade de todos os pontos em uma janela em torno de target_mz.
-    - mtol: tolerância (Da por padrão; ppm se use_ppm=True)
-    - use_ppm: se True, converte mtol para Da baseado em target_mz.
+    - mtol: tolerância (Da)
     - agg: 'sum', 'mean', 'max' ou 'gauss' (peso gaussiano em torno de target_mz)
     - gauss_sigma: fração de mtol usada como sigma no peso gaussiano.
     """
@@ -56,11 +55,7 @@ def aggregate_intensity_for_target(spectrum, target_mz, mtol, use_ppm=False,
     if len(mz) == 0 or len(I) == 0:
         return 0.0
 
-    if use_ppm:
-        da_tol = target_mz * mtol * 1e-6
-    else:
-        da_tol = mtol
-
+    da_tol = mtol
     lower = target_mz - da_tol
     upper = target_mz + da_tol
 
@@ -249,7 +244,7 @@ def safe_figtext(fig, x, y, text, **kwargs):
 # -----------------------------
 
 def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False,
-                       mtol=0.01, ppm_mode=False, agg_mode='sum',
+                       mtol=0.01, agg_mode='sum',
                        gauss_sigma=0.5, precursor_mz=None):
     abs_results = {}
     rel_results = {}
@@ -260,7 +255,7 @@ def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False,
         precursor_mass = max(target_ions) if target_ions else 0
         if use_com and precursor_mass > 0:
             print(f"[WARNING] Using max(target_ions)={precursor_mass:.4f} as precursor mass. "
-                  f"Use --precursor-mz for correct CECOM.")
+                  f"Use --COM <precursor_mz> for correct CECOM.")
 
     for filename in os.listdir(folder_path):
         if not (filename.endswith('.mzML') or filename.endswith('.mzml')):
@@ -310,7 +305,7 @@ def process_mzml_files(folder_path, target_ions, use_ce=False, use_com=False,
 
                 for ion_mz in target_ions:
                     intensity = aggregate_intensity_for_target(
-                        spectrum, ion_mz, mtol, use_ppm=ppm_mode,
+                        spectrum, ion_mz, mtol,
                         agg=agg_mode, gauss_sigma=gauss_sigma
                     )
                     abs_intensities[ion_mz] += intensity
@@ -340,7 +335,7 @@ def show_combined_plot(df, energy_label, y_label_suffix=''):
     plt.tight_layout()
     return fig
 
-def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, auto_fit=False):
+def show_individual_plots(df, energy_label, y_label_suffix='', auto_fit=False):
     figs = []
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
     for ion in ion_columns:
@@ -348,33 +343,23 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
         x_data = df[energy_label].values.astype(float)
         y_data = df[ion].values.astype(float)
 
-        if normalize:
-            max_intensity = np.nanmax(y_data)
-            if max_intensity > 0:
-                y_plot = (y_data / max_intensity) * 100.0
-                y_label = f'Intensity{y_label_suffix} (Normalized to 100%)'
-            else:
-                y_plot = y_data
-                y_label = f'Intensity{y_label_suffix}'
-        else:
-            y_plot = y_data
-            y_label = f'Intensity{y_label_suffix}'
+        y_plot = y_data
+        y_label = f'Intensity{y_label_suffix}'
 
         data_line, = ax.plot(x_data, y_plot, 'o', label=f'Experimental m/z {ion}')
 
         best_model = None
         if auto_fit:
+            # Leave room on the right for legend + equation box
+            fig.subplots_adjust(right=0.75)
+
             best_model = fit_all_models(x_data, y_data)
             if best_model.get('name'):
                 model_name = best_model['name']
                 params = best_model['params']
                 y_fit = best_model['y_fit']
 
-                if normalize and np.nanmax(y_data) > 0:
-                    y_fit_plot = (y_fit / np.nanmax(y_data)) * 100.0
-                else:
-                    y_fit_plot = y_fit
-
+                y_fit_plot = y_fit
                 fit_line, = ax.plot(x_data, y_fit_plot, '-', label=f'Best fit ({model_name})')
 
                 box_text = best_model['latex'] + f"\n$R^2 = {best_model['r2']:.4f}$\nAIC = {best_model['aic']:.2f}"
@@ -390,18 +375,34 @@ def show_individual_plots(df, energy_label, y_label_suffix='', normalize=False, 
                 if ec50 is not None and np.isfinite(ec50):
                     box_text += f"\n$EC_{{50}}$ ≈ {format_equation_param(ec50)}"
 
-                safe_figtext(fig, 0.97, 0.6, box_text,
-                             fontsize=9, verticalalignment='center',
-                             horizontalalignment='right',
-                             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                # Position legend and equation box OUTSIDE the axes (to the right)
+                pos = ax.get_position()
+                right_margin_x = pos.x1 + 0.02
+                legend_y = pos.y1
 
-                ax.legend([data_line, fit_line],
-                          [f'Data (m/z {ion})', f'Best fit ({model_name})'],
-                          loc='upper left')
+                ax.legend(
+                    [data_line, fit_line],
+                    [f'Data (m/z {ion})', f'Best fit ({model_name})'],
+                    loc='upper left',
+                    bbox_to_anchor=(right_margin_x, legend_y),
+                    borderaxespad=0.
+                )
+
+                text_y = (pos.y0 + pos.y1) / 2.0
+                safe_figtext(
+                    fig,
+                    right_margin_x,
+                    text_y,
+                    box_text,
+                    fontsize=9,
+                    verticalalignment='center',
+                    horizontalalignment='left',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
+                )
             else:
                 ax.legend([data_line], [f'Data (m/z {ion})'], loc='upper left')
         else:
-            ax.legend(loc='upper left')
+            ax.legend([data_line], [f'Data (m/z {ion})'], loc='upper left')
 
         xlabel = r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else ('CE (eV)' if energy_label == 'CE' else 'HCD')
         ax.set_xlabel(xlabel)
@@ -427,25 +428,21 @@ def main():
                         help='Save results to CSV (default: do not save)')
     parser.add_argument('--r', action='store_true',
                         help='Use relative intensities instead of absolute')
-    parser.add_argument('--s', action='store_true',
-                        help='Open a separate graph window for each ion (in addition to combined plot)')
-    parser.add_argument('--n', action='store_true',
-                        help='Normalize each ion to 100% in separate graphs (requires --s)')
     parser.add_argument('--fit', action='store_true',
-                        help='Auto-fit best model on individual ion plots (requires --s)')
+                        help='Auto-fit best model on individual ion plots')
     parser.add_argument('--CE', action='store_true',
                         help='Convert HCD values to Collision Energy (eV)')
-    parser.add_argument('--COM', action='store_true',
-                        help='Use Center of Mass collision energy (requires --CE)')
-    parser.add_argument('--precursor-mz', type=float,
-                        help='Precursor m/z used for CE_COM calculation (required with --COM)')
+    parser.add_argument(
+        '--COM',
+        type=float,
+        help='Use Center-of-Mass collision energy (requires --CE); '
+             'value is precursor m/z, e.g. --COM 632.2'
+    )
     parser.add_argument('--tog',
                         help='Only plot the combined graph for specified ion masses (comma-separated)')
 
     parser.add_argument('--mtol', type=float, default=0.01,
-                        help='Mass tolerance for peak aggregation (Da by default) [default: 0.01]')
-    parser.add_argument('--ppm', action='store_true',
-                        help='Interpret --mtol as ppm instead of Da')
+                        help='Mass tolerance for peak aggregation (Da) [default: 0.01]')
     parser.add_argument('--agg', choices=['sum', 'mean', 'max', 'gauss'],
                         default='sum', help='Aggregation mode within tolerance window [default: sum]')
     parser.add_argument('--gauss-sigma', type=float, default=0.5,
@@ -453,18 +450,12 @@ def main():
 
     args = parser.parse_args()
 
-    if args.n and not args.s:
-        parser.error("--n requires --s to be specified")
-    if args.fit and not args.s:
-        parser.error("--fit requires --s to be specified")
-    if args.COM and not args.CE:
-        parser.error("--COM requires --CE to be specified")
-    if args.COM and args.precursor_mz is None:
-        parser.error("--COM requires --precursor-mz to be specified (precursor m/z)")
+    # COM logic: if COM is used, CE must be used, and COM holds precursor m/z (float)
+    if args.COM is not None and not args.CE:
+        parser.error("--COM requires --CE to be specified (COM is computed from CE).")
 
     if args.tog:
-        args.s = False
-        args.n = False
+        # When --tog is used, only combined plot is produced, no fit/individual
         args.fit = False
         ions_for_plotting = [float(mass.strip()) for mass in args.tog.split(',')]
         full_ion_list = [float(mass.strip()) for mass in args.ions.split(',')]
@@ -476,11 +467,14 @@ def main():
     if not target_ions:
         parser.error("At least one ion mass must be specified")
 
+    use_com = args.COM is not None
+    precursor_mz = args.COM if use_com else None
+
     abs_results, rel_results, energy_label, precursor_mass = process_mzml_files(
-        args.folder_path, target_ions, args.CE, args.COM,
-        mtol=args.mtol, ppm_mode=args.ppm,
+        args.folder_path, target_ions, args.CE, use_com,
+        mtol=args.mtol,
         agg_mode=args.agg, gauss_sigma=args.gauss_sigma,
-        precursor_mz=args.precursor_mz
+        precursor_mz=precursor_mz
     )
 
     if not abs_results:
@@ -493,7 +487,13 @@ def main():
     rel_df = pd.DataFrame.from_dict(rel_results, orient='index')
     rel_df.sort_values(energy_label, inplace=True)
 
-    energy_cols = ['HCD', 'CE', 'CECOM'] if args.COM else (['HCD', 'CE'] if args.CE else ['HCD'])
+    if use_com:
+        energy_cols = ['HCD', 'CE', 'CECOM']
+    elif args.CE:
+        energy_cols = ['HCD', 'CE']
+    else:
+        energy_cols = ['HCD']
+
     other_cols = [col for col in abs_df.columns if col not in energy_cols]
     abs_df = abs_df[energy_cols + other_cols]
     rel_df = rel_df[energy_cols + other_cols]
@@ -506,7 +506,7 @@ def main():
         (rel_df if args.r else abs_df).to_csv(csv_path, index=False)
         print(f"Results saved to {csv_filename}")
 
-    if args.COM:
+    if use_com:
         print(f"Precursor mass used for CECOM calculation: {precursor_mass:.4f} m/z")
 
     plot_df = rel_df if args.r else abs_df
@@ -518,8 +518,13 @@ def main():
         show_combined_plot(plot_df, energy_label, y_label_suffix)
     else:
         show_combined_plot(plot_df, energy_label, y_label_suffix)
-        if args.s:
-            show_individual_plots(plot_df, energy_label, y_label_suffix, args.n, args.fit)
+
+        # Individual plots:
+        # - if there is more than one ion, OR
+        # - if --fit was requested (even for a single ion)
+        ion_columns = [col for col in plot_df.columns if col not in energy_cols]
+        if len(ion_columns) > 1 or args.fit:
+            show_individual_plots(plot_df, energy_label, y_label_suffix, auto_fit=args.fit)
 
     plt.show()
 
