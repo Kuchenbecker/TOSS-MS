@@ -83,7 +83,6 @@ def aggregate_intensity_for_target(spectrum, target_mz, mtol,
 
 def four_pl(x, A, B, EC50, s):
     """4-parameter logistic (4PL)"""
-    # y = B + (A - B) / (1 + (x/EC50)^s)
     return B + (A - B) / (1.0 + (x / EC50) ** s)
 
 def exp_decay(x, A, k, C):
@@ -113,7 +112,7 @@ def gauss_peak(x, A, mu, sigma, C):
 def lognormal_peak(x, A, mu, sigma, C):
     """Log-normal 'shape' (skewed peak): y = C + A * exp(-(ln x - mu)^2 / (2*sigma^2))"""
     sigma = max(sigma, 1e-12)
-    x = np.maximum(x, 1e-12)  # estabilidade numérica
+    x = np.maximum(x, 1e-12)
     return C + A * np.exp(- (np.log(x) - mu) ** 2 / (2.0 * sigma ** 2))
 
 MODEL_SPECS = {
@@ -121,26 +120,43 @@ MODEL_SPECS = {
         'fn': four_pl,
         'p0': lambda x, y: [float(np.nanmax(y)), float(np.nanmin(y)), np.nanmedian(x), 3.0],
         'bounds': ([0, -np.inf, 0, 0.1], [np.inf, np.inf, np.inf, 20.0]),
-        'latex': lambda p: (r"$y= %s + \frac{%s-%s}{1+(x/%s)^{%s}}$"
-                            % tuple(map(format_equation_param, [p[1], p[0], p[1], p[2], p[3]])))
+        'latex': lambda p: (
+            r"$y= %s + \frac{%s-%s}{1+(x/%s)^{%s}}$"
+            % tuple(map(format_equation_param, [p[1], p[0], p[1], p[2], p[3]]))
+        )
     },
     'Exponential': {
         'fn': exp_decay,
         'p0': lambda x, y: [float(np.nanmax(y)), 1.0, float(np.nanmin(y))],
         'bounds': ([0.0, 0.0, -np.inf], [np.inf, 10.0, np.inf]),
-        'latex': lambda p: (r"$y= %s\,e^{-%s x}+%s$" % tuple(map(format_equation_param, p)))
+        'latex': lambda p: (
+            r"$y= %s\,e^{-%s x}+%s$" % tuple(map(format_equation_param, p))
+        )
     },
     'WeibullSurv': {
         'fn': weibull_surv,
-        'p0': lambda x, y: [float(np.nanmax(y)), max(1e-6, float(np.nanmedian(x))), 3.0, float(np.nanmin(y))],
+        'p0': lambda x, y: [
+            float(np.nanmax(y)),
+            max(1e-6, float(np.nanmedian(x))),
+            3.0,
+            float(np.nanmin(y))
+        ],
         'bounds': ([0.0, 1e-6, 0.1, -np.inf], [np.inf, 10.0, 20.0, np.inf]),
-        'latex': lambda p: (r"$y= %s\,e^{-(x/%s)^{%s}}+%s$" % tuple(map(format_equation_param, p)))
+        'latex': lambda p: (
+            r"$y= %s\,e^{-(x/%s)^{%s}}+%s$"
+            % tuple(map(format_equation_param, p))
+        )
     },
     'Gompertz': {
         'fn': gompertz,
-        'p0': lambda x, y: [float(np.nanmax(y)), 1.0, 1.0, float(np.nanmin(y))],
+        'p0': lambda x, y: [
+            float(np.nanmax(y)), 1.0, 1.0, float(np.nanmin(y))
+        ],
         'bounds': ([0.0, 1e-6, -10.0, -np.inf], [np.inf, 100.0, 10.0, np.inf]),
-        'latex': lambda p: (r"$y= %s\,e^{-%s e^{%s x}}+%s$" % tuple(map(format_equation_param, p)))
+        'latex': lambda p: (
+            r"$y= %s\,e^{-%s e^{%s x}}+%s$"
+            % tuple(map(format_equation_param, p))
+        )
     },
     'GaussPeak': {
         'fn': gauss_peak,
@@ -151,8 +167,10 @@ MODEL_SPECS = {
             float(np.nanmin(y))
         ],
         'bounds': ([0.0, 0.0, 1e-6, -np.inf], [np.inf, np.inf, 10.0, np.inf]),
-        'latex': lambda p: (r"$y= %s + %s \exp\left(-\frac{(x-%s)^2}{2 %s^2}\right)$"
-                            % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]])))
+        'latex': lambda p: (
+            r"$y= %s + %s \exp\left(-\frac{(x-%s)^2}{2 %s^2}\right)$"
+            % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]]))
+        )
     },
     'LogNormalPeak': {
         'fn': lognormal_peak,
@@ -163,8 +181,10 @@ MODEL_SPECS = {
             float(np.nanmin(y))
         ],
         'bounds': ([0.0, -10.0, 1e-6, -np.inf], [np.inf, 10.0, 5.0, np.inf]),
-        'latex': lambda p: (r"$y= %s + %s \exp\left(-\frac{(\ln x - %s)^2}{2 %s^2}\right)$"
-                            % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]])))
+        'latex': lambda p: (
+            r"$y= %s + %s \exp\left(-\frac{(\ln x - %s)^2}{2 %s^2}\right)$"
+            % tuple(map(format_equation_param, [p[3], p[0], p[1], p[2]]))
+        )
     }
 }
 
@@ -184,8 +204,8 @@ def compute_aic(y, y_fit, num_params):
 
 def fit_all_models(x, y):
     """
-    Tenta ajustar todos os modelos em MODEL_SPECS aos dados (x, y) e retorna
-    um dicionário com informações do melhor modelo (menor AIC).
+    Ajusta todos os modelos em MODEL_SPECS aos dados (x, y)
+    e retorna o melhor modelo (menor AIC).
     """
     results = []
     for name, spec in MODEL_SPECS.items():
@@ -218,11 +238,11 @@ def fit_all_models(x, y):
     return ok[0]
 
 # -----------------------------
-# Text rendering fallback
+# Text rendering fallback helpers
 # -----------------------------
 
 def _sanitize_for_plain(s: str) -> str:
-    """Remove TeX commands for a plain-text fallback if mathtext fails."""
+    """Remove comandos TeX para um fallback texto simples."""
     s = s.replace('$', '')
     s = s.replace(r'\exp', 'exp').replace(r'\ln', 'ln')
     s = s.replace(r'\left', '').replace(r'\right', '')
@@ -231,13 +251,13 @@ def _sanitize_for_plain(s: str) -> str:
     s = re.sub(r'\s{2,}', ' ', s)
     return s
 
-def safe_figtext(fig, x, y, text, **kwargs):
-    """Try to render LaTeX; on error, render plain text so the UI never crashes."""
+def safe_axtext(ax, x, y, text, **kwargs):
+    """Tenta desenhar TeX no ax; se der erro, usa versão plain."""
     try:
-        return fig.text(x, y, text, **kwargs)
+        return ax.text(x, y, text, **kwargs)
     except Exception:
-        plain = _sanitize_for_plain(text) + "\n[rendered as plain text]"
-        return fig.text(x, y, plain, **kwargs)
+        plain = _sanitize_for_plain(text) + "\n[plain text]"
+        return ax.text(x, y, plain, **kwargs)
 
 # -----------------------------
 # Core data extraction
@@ -327,7 +347,10 @@ def show_combined_plot(df, energy_label, y_label_suffix=''):
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
     for ion in ion_columns:
         plt.plot(df[energy_label], df[ion], 'o-', label=f'm/z {ion}')
-    xlabel = r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else ('CE (eV)' if energy_label == 'CE' else 'HCD')
+    xlabel = (
+        r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM'
+        else ('CE (eV)' if energy_label == 'CE' else 'HCD')
+    )
     plt.xlabel(xlabel)
     plt.ylabel(f'Intensity{y_label_suffix}')
     plt.legend(loc='center left', bbox_to_anchor=(1.05, 0.5))
@@ -336,8 +359,18 @@ def show_combined_plot(df, energy_label, y_label_suffix=''):
     return fig
 
 def show_individual_plots(df, energy_label, y_label_suffix='', auto_fit=False):
+    """
+    Plots individuais por íon.
+    - Sem fit: legenda padrão dentro do gráfico.
+    - Com --fit:
+        * sem legenda
+        * curva experimental + curva ajustada
+        * nome do modelo no título
+        * caixa de equação + R² + AIC abaixo do gráfico
+    """
     figs = []
     ion_columns = [col for col in df.columns if col not in ['HCD', 'CE', 'CECOM']]
+
     for ion in ion_columns:
         fig, ax = plt.subplots(figsize=(10, 6))
         x_data = df[energy_label].values.astype(float)
@@ -348,19 +381,21 @@ def show_individual_plots(df, energy_label, y_label_suffix='', auto_fit=False):
 
         data_line, = ax.plot(x_data, y_plot, 'o', label=f'Experimental m/z {ion}')
 
-        best_model = None
+        model_name_for_title = None
+        box_text = None
+
         if auto_fit:
-            # Leave room on the right for legend + equation box
-            fig.subplots_adjust(right=0.75)
+            # margem inferior maior para caber a caixa
+            fig.subplots_adjust(bottom=0.3)
 
             best_model = fit_all_models(x_data, y_data)
             if best_model.get('name'):
                 model_name = best_model['name']
+                model_name_for_title = model_name
                 params = best_model['params']
                 y_fit = best_model['y_fit']
 
-                y_fit_plot = y_fit
-                fit_line, = ax.plot(x_data, y_fit_plot, '-', label=f'Best fit ({model_name})')
+                ax.plot(x_data, y_fit, '-', label=f'Best fit ({model_name})')
 
                 box_text = best_model['latex'] + f"\n$R^2 = {best_model['r2']:.4f}$\nAIC = {best_model['aic']:.2f}"
 
@@ -375,43 +410,49 @@ def show_individual_plots(df, energy_label, y_label_suffix='', auto_fit=False):
                 if ec50 is not None and np.isfinite(ec50):
                     box_text += f"\n$EC_{{50}}$ ≈ {format_equation_param(ec50)}"
 
-                # Position legend and equation box OUTSIDE the axes (to the right)
-                pos = ax.get_position()
-                right_margin_x = pos.x1 + 0.02
-                legend_y = pos.y1
-
-                ax.legend(
-                    [data_line, fit_line],
-                    [f'Data (m/z {ion})', f'Best fit ({model_name})'],
-                    loc='upper left',
-                    bbox_to_anchor=(right_margin_x, legend_y),
-                    borderaxespad=0.
-                )
-
-                text_y = (pos.y0 + pos.y1) / 2.0
-                safe_figtext(
-                    fig,
-                    right_margin_x,
-                    text_y,
-                    box_text,
-                    fontsize=9,
-                    verticalalignment='center',
-                    horizontalalignment='left',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
-                )
+                # sem legenda nessas figuras de fit
+                # caixa de equação abaixo do gráfico (y negativo), centralizada
+                if box_text is not None:
+                    safe_axtext(
+                        ax,
+                        0.5,
+                        -0.35,
+                        box_text,
+                        transform=ax.transAxes,
+                        fontsize=9,
+                        va='center',
+                        ha='center',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.85),
+                        clip_on=False
+                    )
             else:
+                # se o fit falhar, pelo menos mostra legenda simples dentro
                 ax.legend([data_line], [f'Data (m/z {ion})'], loc='upper left')
         else:
+            # modo clássico, sem fit: legenda simples dentro
             ax.legend([data_line], [f'Data (m/z {ion})'], loc='upper left')
 
-        xlabel = r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM' else ('CE (eV)' if energy_label == 'CE' else 'HCD')
+        xlabel = (
+            r'CE$_{\mathrm{COM}}$ (eV)' if energy_label == 'CECOM'
+            else ('CE (eV)' if energy_label == 'CE' else 'HCD')
+        )
         ax.set_xlabel(xlabel)
         ax.set_ylabel(y_label)
-        title = rf'Ion Intensity vs. CE$_{{\mathrm{{COM}}}}$ (m/z {ion})' if energy_label == 'CECOM' else f'Ion Intensity vs. {energy_label} (m/z {ion})'
-        ax.set_title(title)
-        ax.grid(True)
 
+        base_title = (
+            rf'Ion Intensity vs. CE$_{{\mathrm{{COM}}}}$ (m/z {ion})'
+            if energy_label == 'CECOM'
+            else f'Ion Intensity vs. {energy_label} (m/z {ion})'
+        )
+
+        if auto_fit and model_name_for_title:
+            ax.set_title(f'{base_title} - {model_name_for_title} fit')
+        else:
+            ax.set_title(base_title)
+
+        ax.grid(True)
         figs.append(fig)
+
     return figs
 
 # -----------------------------
@@ -444,7 +485,8 @@ def main():
     parser.add_argument('--mtol', type=float, default=0.01,
                         help='Mass tolerance for peak aggregation (Da) [default: 0.01]')
     parser.add_argument('--agg', choices=['sum', 'mean', 'max', 'gauss'],
-                        default='sum', help='Aggregation mode within tolerance window [default: sum]')
+                        default='sum',
+                        help='Aggregation mode within tolerance window [default: sum]')
     parser.add_argument('--gauss-sigma', type=float, default=0.5,
                         help='Relative width (fraction of --mtol) for Gaussian weighting when --agg gauss [default: 0.5]')
 
@@ -519,9 +561,9 @@ def main():
     else:
         show_combined_plot(plot_df, energy_label, y_label_suffix)
 
-        # Individual plots:
-        # - if there is more than one ion, OR
-        # - if --fit was requested (even for a single ion)
+        # Plots individuais:
+        # - se tiver mais de um íon, ou
+        # - se --fit foi requisitado (mesmo para 1 íon)
         ion_columns = [col for col in plot_df.columns if col not in energy_cols]
         if len(ion_columns) > 1 or args.fit:
             show_individual_plots(plot_df, energy_label, y_label_suffix, auto_fit=args.fit)
@@ -530,3 +572,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
